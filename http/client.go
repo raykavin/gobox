@@ -10,10 +10,26 @@ import (
 	"io"
 	stdhttp "net/http"
 	"net/url"
+	"time"
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 )
+
+// MapParams is a map type used by this package for request headers
+// and query parameters.
+type MapParams map[string]string
+
+// Set assigns v to k in the map.
+// The receiver must be initialized before calling Set.
+func (m MapParams) Set(k, v string) {
+	m[k] = v
+}
+
+// Del removes k from the map if it exists.
+func (m MapParams) Del(k string) {
+	delete(m, k)
+}
 
 // Header name constants.
 const (
@@ -49,7 +65,7 @@ const (
 const AcceptEncodingAll = "gzip, deflate, br, zstd"
 
 // DefaultJSONHeaders returns a new map with standard JSON request headers.
-func DefaultJSONHeaders() map[string]string {
+func DefaultJSONHeaders() MapParams {
 	return map[string]string{
 		HeaderContentType: MIMEApplicationJSON,
 		HeaderAccept:      MIMEApplicationJSON,
@@ -57,7 +73,7 @@ func DefaultJSONHeaders() map[string]string {
 }
 
 // DefaultFormHeaders returns a new map with standard form-encoded request headers.
-func DefaultFormHeaders() map[string]string {
+func DefaultFormHeaders() MapParams {
 	return map[string]string{
 		HeaderContentType: MIMEApplicationFormURLEncoded,
 	}
@@ -65,16 +81,14 @@ func DefaultFormHeaders() map[string]string {
 
 // DefaultCompressedHeaders returns a new map that advertises support for all
 // compressed encodings. Use alongside DecompressResponse.
-func DefaultCompressedHeaders() map[string]string {
+func DefaultCompressedHeaders() MapParams {
 	return map[string]string{
 		HeaderAcceptEncoding: AcceptEncodingAll,
 	}
 }
 
 // defaultClient is the package-level HTTP client.
-// Unlike stdhttp.DefaultClient, it has no global timeout — callers are
-// expected to pass a context with an appropriate deadline.
-var defaultClient = &stdhttp.Client{}
+var defaultClient = &stdhttp.Client{Timeout: 30 * time.Second}
 
 // NewRequestWithContext builds and executes an HTTP request, returning the
 // raw response body, the status code, and any error.
@@ -85,7 +99,7 @@ func NewRequestWithContext(
 	urlStr string,
 	queryParams map[string]string,
 	headers map[string]string,
-	body []byte,
+	payload []byte,
 	client ...*stdhttp.Client,
 ) ([]byte, int, error) {
 	u, err := url.Parse(urlStr)
@@ -106,12 +120,12 @@ func NewRequestWithContext(
 		u.RawQuery = q.Encode()
 	}
 
-	var reqBody io.Reader
-	if len(body) > 0 {
-		reqBody = bytes.NewReader(body)
+	var reqPayload io.Reader
+	if len(payload) > 0 {
+		reqPayload = bytes.NewReader(payload)
 	}
 
-	req, err := stdhttp.NewRequestWithContext(ctx, method, u.String(), reqBody)
+	req, err := stdhttp.NewRequestWithContext(ctx, method, u.String(), reqPayload)
 	if err != nil {
 		return nil, 0, fmt.Errorf("creating request: %w", err)
 	}
