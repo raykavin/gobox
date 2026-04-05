@@ -6,8 +6,8 @@ import (
 	"fmt"
 )
 
-// Config holds the parameters needed to open a database connection.
-type Config struct {
+// SQLConfig holds the parameters needed to open a database connection.
+type SQLConfig struct {
 	// Driver is the database driver name registered via sql.Register
 	// (e.g. "postgres", "mysql", "sqlite3").
 	Driver string
@@ -21,7 +21,7 @@ type Config struct {
 // Connector.Query handles the rows.Next loop.
 type ScanFunc[T any] func(rows *sql.Rows) (T, error)
 
-// Connector is a generic database source that opens a connection using Config
+// Connector is a generic database source that opens a connection using SQLConfig
 // and converts each result row into T via a caller-supplied ScanFunc.
 type Connector[T any] struct {
 	db   *sql.DB
@@ -30,7 +30,7 @@ type Connector[T any] struct {
 
 // New opens and pings the database described by cfg, then returns a Connector
 // ready to execute queries. The caller is responsible for calling Close when done.
-func New[T any](cfg Config, scan ScanFunc[T]) (*Connector[T], error) {
+func New[T any](cfg SQLConfig, scan ScanFunc[T]) (*Connector[T], error) {
 	if cfg.Driver == "" {
 		return nil, fmt.Errorf("database driver must not be empty")
 	}
