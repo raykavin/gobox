@@ -1,6 +1,11 @@
 # database
 
-The `database` package provides a lightweight abstraction over `database/sql` for shared data-access helpers. It keeps the module free from driver-specific dependencies while letting each consuming project decide how rows should be scanned into application types.
+The `database` package provides two reusable approaches for data access:
+
+- a lightweight typed wrapper around `database/sql`
+- a configurable GORM bootstrap with connection-pool and logging helpers
+
+This split allows consumers to choose the abstraction level they need while keeping both options documented in a single package.
 
 ## Import
 
@@ -10,18 +15,26 @@ import "github.com/raykavin/gokit/database"
 
 ## What it provides
 
-- a small `Config` type for driver and DSN setup
-- a generic `Connector[T]` for typed query results
+- `SQLConfig` for plain `database/sql` usage
+- `GormConfig` for GORM initialization and pool configuration
+- a generic `Connector[T]` for typed query results with `database/sql`
 - caller-defined row mapping through `ScanFunc[T]`
-- connection startup validation through `PingContext`
+- GORM connection bootstrap with retry support
+- connection pool updates and connection statistics helpers for GORM
+- sentinel errors for GORM configuration and bootstrap failures
 
 ## Main types
 
-- `Config`: database driver name and DSN
+- `SQLConfig`: driver name and DSN for `database/sql`
+- `GormConfig`: dialector, DSN, retry, pool, logging, and optional `*gorm.Config` override
 - `ScanFunc[T]`: maps a single `sql.Rows` record into `T`
-- `Connector[T]`: executes queries and returns `[]T`
+- `Connector[T]`: executes typed queries and returns `[]T`
 
-## Example
+## SQL usage
+
+Use `SQLConfig` with `New()` when you want a small wrapper over `database/sql` and full control over query execution and row scanning.
+
+Example:
 
 ```go
 package main
@@ -42,7 +55,7 @@ type User struct {
 }
 
 func main() {
-	conn, err := database.New(database.Config{
+	conn, err := database.New(database.SQLConfig{
 		Driver: "postgres",
 		DSN:    "postgres://user:pass@localhost:5432/app?sslmode=disable",
 	}, func(rows *sql.Rows) (User, error) {
@@ -64,7 +77,75 @@ func main() {
 }
 ```
 
-## Notes
+## GORM usage
+
+Use `GormConfig` with `NewGorm()` when you want a ready-to-use `*gorm.DB` with shared defaults for retry, logging, and connection pool settings.
+
+Supported dialectors:
+
+- `postgres`
+- `mysql`
+- `mariadb`
+- `sqlite`
+- `sqlserver`
+- `mssql`
+
+Example:
+
+```go
+package main
+
+import (
+	"log"
+	"time"
+
+	"github.com/raykavin/gokit/database"
+)
+
+type User struct {
+	ID   uint
+	Name string
+}
+
+func main() {
+	cfg := database.DefaultGormConfig()
+	cfg.Dialector = "postgres"
+	cfg.DSN = "postgres://user:pass@localhost:5432/app?sslmode=disable"
+	cfg.LogLevel = "info"
+	cfg.SlowThreshold = 250 * time.Millisecond
+
+	db, err := database.NewGorm(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := db.AutoMigrate(&User{}); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+## GORM notes
+
+- `DefaultGormConfig()` returns sensible defaults for pooling, retries, and log behavior
+- `NewGorm()` validates the config, resolves the dialector, retries the initial connection, and configures the underlying `sql.DB` pool
+- `GormConfig.GormConfig` can be used to pass a custom `*gorm.Config` override
+- `UpdateConnectionPool()` reapplies pool settings on an existing `*gorm.DB`
+- `GetConnectionStats()` returns `sql.DBStats` for an active GORM connection
+- `ParseLoggerLevel()` maps strings such as `silent`, `info`, `warn`, and `error` to GORM log levels
+
+## Sentinel errors
+
+The GORM helper exposes sentinel errors that can be checked with `errors.Is`:
+
+- `ErrInvalidDatabaseConfig`
+- `ErrDatabaseDSNRequired`
+- `ErrDatabaseDialectorRequired`
+- `ErrUnsupportedDialector`
+- `ErrDatabaseConnectionFailed`
+- `ErrDatabasePoolAccessFailed`
+
+## SQL notes
 
 - `New()` opens the database connection, validates the input, and pings the database before returning a connector
 - `Query()` executes a query with optional arguments and maps each row using the provided scan function
