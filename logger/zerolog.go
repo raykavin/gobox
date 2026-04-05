@@ -9,8 +9,6 @@ import (
 	"github.com/rs/zerolog/pkgerrors"
 )
 
-const logIfTag = "Infra: Log"
-
 var ErrInvalidLogLevel = errors.New("invalid logger level")
 
 // Config holds logger configuration
