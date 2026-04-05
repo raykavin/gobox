@@ -16,15 +16,6 @@ import (
 	glog "gorm.io/gorm/logger"
 )
 
-var (
-	ErrInvalidDatabaseConfig     = errors.New("invalid database configuration")
-	ErrDatabaseDSNRequired       = errors.New("database dsn is required")
-	ErrDatabaseDialectorRequired = errors.New("database dialector is required")
-	ErrUnsupportedDialector      = errors.New("unsupported database dialector")
-	ErrDatabaseConnectionFailed  = errors.New("failed to connect to database")
-	ErrDatabasePoolAccessFailed  = errors.New("failed to access database connection pool")
-)
-
 // Config holds database configuration
 type GormConfig struct {
 	DSN             string        // Data Source Name for the database connection
@@ -70,7 +61,7 @@ func NewGorm(cfg *GormConfig) (*gorm.DB, error) {
 	}
 
 	// Validate configuration
-	if err := validateConfig(cfg); err != nil {
+	if err := validateGormConfig(cfg); err != nil {
 		return nil, err
 	}
 
@@ -111,8 +102,8 @@ func NewGorm(cfg *GormConfig) (*gorm.DB, error) {
 	return conn, nil
 }
 
-// validateConfig validates the database configuration
-func validateConfig(cfg *GormConfig) error {
+// validateGormConfig validates the database configuration
+func validateGormConfig(cfg *GormConfig) error {
 	if cfg.DSN == "" {
 		return ErrDatabaseDSNRequired
 	}
