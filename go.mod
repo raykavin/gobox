@@ -1,4 +1,4 @@
-module github.com/raykavin/gopkg
+module github.com/raykavin/gokit
 
 go 1.25.0
 
