@@ -3,8 +3,10 @@ module github.com/raykavin/gokit
 go 1.25.0
 
 require (
+	github.com/andybalholm/brotli v1.2.1
 	github.com/fatih/color v1.19.0
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/klauspost/compress v1.18.5
 	github.com/rs/zerolog v1.35.0
 	github.com/spf13/viper v1.21.0
 	golang.org/x/text v0.28.0
