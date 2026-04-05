@@ -2,7 +2,7 @@
 
 `gokit` is a Go module for shared libraries that can be reused across different projects. The goal is to keep common building blocks in one place so teams can reduce code duplication, standardize recurring infrastructure concerns, and move faster when starting or evolving services.
 
-At the moment, the repository provides utilities for configuration loading, logging, and SQL database access, with an emphasis on low coupling and practical reuse between applications.
+At the moment, the repository provides utilities for configuration loading, HTTP requests, logging, and database access, with an emphasis on low coupling and practical reuse between applications.
 
 ## Purpose
 
@@ -16,7 +16,8 @@ This module exists to:
 ## Available packages
 
 - [`config`](./config/README.md): configuration loading, validation, reload handling, and environment variable expansion
-- [`database`](./database/README.md): lightweight helpers built on top of `database/sql`
+- [`database`](./database/README.md): typed `database/sql` helpers and GORM bootstrap utilities
+- [`http`](./http/README.md): HTTP request helpers, shared header constants, and compressed response handling
 - [`logger`](./logger/README.md): reusable structured logging built on top of `zerolog`
 
 ## Installation
@@ -35,6 +36,7 @@ The root README is intentionally focused on repository-level information. Packag
 
 - [`config/README.md`](./config/README.md)
 - [`database/README.md`](./database/README.md)
+- [`http/README.md`](./http/README.md)
 - [`logger/README.md`](./logger/README.md)
 
 ## Reuse strategy
