@@ -2,7 +2,7 @@
 
 `gokit` is a Go module for shared libraries that can be reused across different projects. The goal is to keep common building blocks in one place so teams can reduce code duplication, standardize recurring infrastructure concerns, and move faster when starting or evolving services.
 
-At the moment, the repository provides utilities for configuration loading and SQL database access, with an emphasis on low coupling and practical reuse between applications.
+At the moment, the repository provides utilities for configuration loading, logging, and SQL database access, with an emphasis on low coupling and practical reuse between applications.
 
 ## Purpose
 
@@ -138,6 +138,58 @@ func main() {
 	}
 
 	log.Printf("users found: %d", len(users))
+}
+```
+
+### `logger`
+
+The `logger` package provides a reusable logging layer built on top of `zerolog`, with support for:
+
+- configurable log level and timestamp layout
+- colored console formatting
+- contextual fields for structured logging
+- helper methods for success, failure, benchmark, and API request logs
+- caller metadata in log output
+- error rendering with improved readability for nested error details
+
+Import:
+
+```go
+import "github.com/raykavin/gokit/logger"
+```
+
+Example:
+
+```go
+package main
+
+import (
+	"log"
+	"time"
+
+	"github.com/raykavin/gokit/logger"
+)
+
+func main() {
+	appLogger, err := logger.New(&logger.Config{
+		Level:          "debug",
+		DateTimeLayout: time.RFC3339,
+		Colored:        true,
+		JSONFormat:     false,
+		UseEmoji:       false,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	appLogger.Info().
+		Str("service", "billing").
+		Msg("service started")
+
+	appLogger.WithContext(map[string]any{
+		"request_id": "req-123",
+		"component":  "http",
+	}).API("GET", "/health", "127.0.0.1", 200, 42*time.Millisecond)
 }
 ```
 
