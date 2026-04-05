@@ -2,7 +2,7 @@
 
 `gokit` is a Go module for shared libraries that can be reused across different projects. The goal is to keep common building blocks in one place so teams can reduce code duplication, standardize recurring infrastructure concerns, and move faster when starting or evolving services.
 
-At the moment, the repository provides utilities for configuration loading, HTTP requests, logging, database access, terminal UX, and authenticated pREST integrations, with an emphasis on low coupling and practical reuse between applications.
+At the moment, the repository provides utilities for configuration loading, HTTP requests, logging, database access, retry workflows, terminal UX, and authenticated pREST integrations, with an emphasis on low coupling and practical reuse between applications.
 
 ## Purpose
 
@@ -20,6 +20,7 @@ This module exists to:
 - [`http`](./http/README.md): HTTP request helpers, shared header constants, and compressed response handling
 - [`logger`](./logger/README.md): reusable structured logging built on top of `zerolog`
 - [`prest`](./prest/README.md): authenticated pREST client with typed JSON decoding and token reuse
+- [`retry`](./retry/README.md): context-aware retry helper with exponential backoff and caller-defined retry rules
 - [`terminal`](./terminal/README.md): terminal banners, headers, highlighted output, and concurrent progress rendering
 
 ## Installation
@@ -41,6 +42,7 @@ The root README is intentionally focused on repository-level information. Packag
 - [`http/README.md`](./http/README.md)
 - [`logger/README.md`](./logger/README.md)
 - [`prest/README.md`](./prest/README.md)
+- [`retry/README.md`](./retry/README.md)
 - [`terminal/README.md`](./terminal/README.md)
 
 ## Reuse strategy
