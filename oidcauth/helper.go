@@ -26,6 +26,9 @@ func validateConfig(config *Config) error {
 	if config.ClientID == "" {
 		return ErrEmptyClientID
 	}
+	if !config.DisableIntrospection && config.ClientSecret == "" {
+		return ErrMissingClientSecret
+	}
 
 	if config.RequestTimeout <= 0 {
 		config.RequestTimeout = defaultRequestTimeout

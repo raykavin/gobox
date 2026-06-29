@@ -19,6 +19,7 @@ import (
 var (
 	ErrInvalidRealmURL       = errors.New("invalid OIDC configuration URL")
 	ErrEmptyClientID         = errors.New("client ID cannot be empty")
+	ErrMissingClientSecret   = errors.New("client secret is required when introspection is enabled")
 	ErrTokenValidationFailed = errors.New("token validation failed")
 	ErrProviderInitFailed    = errors.New("failed to initialize OIDC provider")
 	ErrIntrospectionFailed   = errors.New("token introspection failed")
@@ -31,8 +32,8 @@ const (
 )
 
 // OIDC verifies tokens issued by an OpenID Connect provider and exposes
-// helpers for role-based authorization. A single OIDC value is safe for
-// concurrent use.
+// helpers for role- and scope-based authorization. A single OIDC value is
+// safe for concurrent use.
 type OIDC struct {
 	config     Config
 	provider   *oidc.Provider
@@ -96,7 +97,8 @@ func New(ctx context.Context, config Config, opts ...Option) (*OIDC, error) {
 // The flow is:
 //  1. cache lookup, return immediately on hit (if a Cache was attached);
 //  2. local JWT verification (signature, iss, aud, exp);
-//  3. remote introspection to catch revoked-but-not-yet-expired tokens;
+//  3. remote introspection to catch revoked-but-not-yet-expired tokens,
+//     unless disabled via Config.DisableIntrospection;
 //  4. cache the claims (if a Cache was attached).
 //
 // Any failure in steps 2 or 3 returns ErrTokenValidationFailed; an inactive
@@ -123,12 +125,14 @@ func (o *OIDC) Verify(ctx context.Context, token string) (Claims, error) {
 		return Claims{}, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err)
 	}
 
-	result, err := o.introspect(ctx, token)
-	if err != nil {
-		return Claims{}, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err)
-	}
-	if !result.Active {
-		return Claims{}, ErrTokenRevoked
+	if !o.config.DisableIntrospection {
+		result, err := o.introspect(ctx, token)
+		if err != nil {
+			return Claims{}, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err)
+		}
+		if !result.Active {
+			return Claims{}, ErrTokenRevoked
+		}
 	}
 
 	if o.cache != nil {
@@ -150,12 +154,7 @@ func (o *OIDC) HasRole(claims Claims, role string) bool {
 // HasScope reports whether the given claims include the named scope.
 // Scopes in claims.Scope are space-separated per RFC 6749.
 func (o *OIDC) HasScope(claims Claims, scope string) bool {
-	for _, s := range strings.Fields(claims.Scope) {
-		if s == scope {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Fields(claims.Scope), scope)
 }
 
 // HasAllScopes reports whether the given claims include all of the named

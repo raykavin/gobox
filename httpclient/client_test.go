@@ -95,14 +95,14 @@ func TestDecompressResponse_Brotli(t *testing.T) {
 
 func TestDecompressResponse_UnsupportedEncoding(t *testing.T) {
 	resp := &http.Response{
-		Header: http.Header{"Content-Encoding": []string{"zstd"}},
+		Header: http.Header{"Content-Encoding": []string{"unsupported-fake"}},
 		Body:   io.NopCloser(strings.NewReader("")),
 	}
 	_, err := DecompressResponse(resp)
 	if err == nil {
 		t.Fatal("expected error for unsupported encoding")
 	}
-	if !strings.Contains(err.Error(), "zstd") {
+	if !strings.Contains(err.Error(), "unsupported-fake") {
 		t.Errorf("expected error to mention encoding name, got %v", err)
 	}
 }
