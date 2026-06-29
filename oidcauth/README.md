@@ -1,13 +1,14 @@
 # oidcauth
 
-OpenID Connect token verification for Go, with optional in-memory caching and role-based authorization helpers. Designed for Keycloak but compatible with any OIDC-compliant provider.
+OpenID Connect token verification for Go, with optional in-memory caching and authorization helpers. Designed for Keycloak but compatible with any OIDC-compliant provider.
 
 ## Features
 
 - JWT verification (signature, issuer, audience, expiry) via [`go-oidc`](https://github.com/coreos/go-oidc)
 - RFC 7662 token introspection to detect server-side revocation
-- Pluggable cache via the `Cache` interface ship with `MemoryCache` or bring your own (Redis, Memcached, etc.)
-- Keycloak client-role helpers via `HasRole`
+- Pluggable cache via the `Cache` interface — ships with `MemoryCache` or bring your own (Redis, Memcached, etc.)
+- Authorization helpers: `HasRole`, `HasScope`, `HasAllScopes`, `IsAuthorizedParty`
+- Machine-to-machine (client credentials) support via `SkipClientIDCheck`
 - Safe for concurrent use
 
 ## Installation
@@ -18,7 +19,7 @@ go get github.com/raykavin/gobox/oidcauth
 
 ## Usage
 
-### Without cache
+### Basic
 
 Every call to `Verify` performs a full JWT check plus a remote introspection request.
 
@@ -51,8 +52,7 @@ defer cache.Close()
 verifier, err := oidcauth.New(ctx, config, oidcauth.WithCache(cache))
 ```
 
-The entry TTL is `min(token.exp, now + duration)` the cache never serves a
-token past its own expiry.
+The entry TTL is `min(token.exp, now + duration)` — the cache never serves a token past its own expiry.
 
 ### With a custom cache backend
 
@@ -63,9 +63,7 @@ type Cache interface {
     Get(key string, now time.Time) (Claims, bool)
     Set(key string, claims Claims, now time.Time)
 }
-```
 
-```go
 verifier, err := oidcauth.New(ctx, config, oidcauth.WithCache(myRedisCache))
 ```
 
@@ -76,6 +74,64 @@ verifier, err := oidcauth.New(ctx, config, oidcauth.WithCache(myRedisCache))
 ```go
 if !verifier.HasRole(claims, "admin") {
     http.Error(w, "forbidden", http.StatusForbidden)
+    return
+}
+```
+
+### Scope-based authorization
+
+`HasScope` checks for a single OAuth 2.0 scope in `claims.Scope` (space-separated, per RFC 6749).
+
+```go
+if !verifier.HasScope(claims, "read:data") {
+    http.Error(w, "insufficient scope", http.StatusForbidden)
+    return
+}
+```
+
+`HasAllScopes` requires every listed scope to be present.
+
+```go
+if !verifier.HasAllScopes(claims, "read:data", "write:data") {
+    http.Error(w, "insufficient scope", http.StatusForbidden)
+    return
+}
+```
+
+### Authorized party
+
+`IsAuthorizedParty` compares `claims.Azp` against an expected client ID. Useful when a gateway or another service forwards tokens downstream.
+
+```go
+if !verifier.IsAuthorizedParty(claims, "api-gateway") {
+    http.Error(w, "unauthorized party", http.StatusForbidden)
+    return
+}
+```
+
+### Machine-to-machine (client credentials)
+
+Access tokens obtained via the OAuth 2.0 client credentials grant often carry an `aud` value that does not match the resource server's `ClientID`, causing the default audience check to fail. Set `SkipClientIDCheck: true` to bypass it and validate the caller identity manually with the authorization helpers.
+
+```go
+verifier, err := oidcauth.New(ctx, oidcauth.Config{
+    RealmURL:          "https://keycloak.example.com/realms/main",
+    ClientID:          "resource-server",
+    ClientSecret:      "secret",
+    SkipClientIDCheck: true, // M2M tokens may not carry this client's ID in aud
+})
+
+claims, err := verifier.Verify(ctx, token)
+if err != nil {
+    // handle error
+}
+
+if !verifier.IsAuthorizedParty(claims, "allowed-service") {
+    http.Error(w, "unauthorized party", http.StatusForbidden)
+    return
+}
+if !verifier.HasAllScopes(claims, "read:data") {
+    http.Error(w, "insufficient scope", http.StatusForbidden)
     return
 }
 ```
@@ -111,19 +167,33 @@ case err != nil:
 
 ```go
 oidcauth.Config{
-    RealmURL:     "https://keycloak.example.com/realms/main", // required
-    ClientID:     "my-app",                                   // required
-    ClientSecret: "secret",                                   // required for introspection
-    RequestTimeout: 10 * time.Second,                         // default: 30s
-    // test-only flags do not use in production
-    SkipIssuerCheck:   false,
+    RealmURL:      "https://keycloak.example.com/realms/main", // required
+    ClientID:      "my-app",                                   // required
+    ClientSecret:  "secret",                                   // required for introspection
+    RequestTimeout: 10 * time.Second,                          // default: 30s
+
+    // SkipClientIDCheck disables audience validation against ClientID.
+    // Use for M2M / client-credentials flows where aud does not match.
     SkipClientIDCheck: false,
-    SkipExpiryCheck:   false,
+
+    // Test-only — do not enable in production.
+    SkipIssuerCheck: false,
+    SkipExpiryCheck: false,
 }
 ```
 
+## Authorization helpers
+
+| Method | Checks |
+|---|---|
+| `HasRole(claims, role)` | `resource_access[clientID].roles` contains `role` |
+| `HasScope(claims, scope)` | `claims.Scope` contains `scope` (exact word match) |
+| `HasAllScopes(claims, scopes...)` | every scope in the list is present |
+| `IsAuthorizedParty(claims, azp)` | `claims.Azp == azp` |
+
 ## Security notes
 
-- Cache keys are SHA-256 hashes of the raw bearer token raw tokens are never stored in memory as map keys.
-- `SkipIssuerCheck`, `SkipClientIDCheck`, and `SkipExpiryCheck` are intended for testing only. Enabling them in production disables core JWT security checks.
+- Cache keys are SHA-256 hashes of the raw bearer token — raw tokens are never stored in memory as map keys.
+- `SkipIssuerCheck` and `SkipExpiryCheck` are intended for testing only. Enabling them in production disables core JWT security checks.
+- `SkipClientIDCheck` is legitimate for M2M flows; compensate by validating `azp` and scopes explicitly.
 - Revoked tokens remain valid for up to `CacheDuration` when caching is enabled. Choose a TTL that matches your revocation latency requirements.
