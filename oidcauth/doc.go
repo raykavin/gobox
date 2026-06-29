@@ -1,5 +1,6 @@
 // Package oidcauth provides OpenID Connect token verification with optional
-// in-memory caching and role-based authorization helpers.
+// in-memory caching and authorization helpers for roles, scopes, and
+// authorized parties.
 //
 // # Basic usage
 //
@@ -14,7 +15,7 @@
 //
 //	claims, err := verifier.Verify(ctx, bearerToken)
 //	if err != nil {
-//	    // handle errors.Is(err, oidcauth.ErrTokenRevoked), etc.
+//	    // inspect with errors.Is(err, oidcauth.ErrTokenRevoked), etc.
 //	}
 //
 // # Caching
@@ -37,7 +38,8 @@
 //
 // # Role-based authorization
 //
-// HasRole checks whether a token carries a specific Keycloak client role:
+// HasRole checks whether a token carries a specific Keycloak client role
+// (resource_access[clientID].roles):
 //
 //	if !verifier.HasRole(claims, "admin") {
 //	    http.Error(w, "forbidden", http.StatusForbidden)
@@ -94,6 +96,19 @@
 //	    return
 //	}
 //
+// # Disabling introspection
+//
+// By default Verify performs a remote RFC 7662 introspection call to catch
+// revoked-but-not-yet-expired tokens. When introspection is enabled,
+// ClientSecret is required. To rely solely on local JWT verification and
+// skip the introspection round-trip, set DisableIntrospection: true:
+//
+//	verifier, err := oidcauth.New(ctx, oidcauth.Config{
+//	    RealmURL:             "https://keycloak.example.com/realms/main",
+//	    ClientID:             "my-app",
+//	    DisableIntrospection: true, // no ClientSecret needed; no revocation detection
+//	})
+//
 // # Error handling
 //
 // All errors wrap one of the package-level sentinels and can be inspected
@@ -106,5 +121,7 @@
 //	    // signature / expiry / audience check failed
 //	case errors.Is(err, oidcauth.ErrIntrospectionFailed):
 //	    // could not reach the introspection endpoint
+//	case errors.Is(err, oidcauth.ErrMissingClientSecret):
+//	    // ClientSecret not set and introspection is enabled
 //	}
 package oidcauth
