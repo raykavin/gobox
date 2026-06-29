@@ -6,7 +6,7 @@ OpenID Connect token verification for Go, with optional in-memory caching and au
 
 - JWT verification (signature, issuer, audience, expiry) via [`go-oidc`](https://github.com/coreos/go-oidc)
 - RFC 7662 token introspection to detect server-side revocation (opt-out via `DisableIntrospection`)
-- Pluggable cache via the `Cache` interface — ships with `MemoryCache` or bring your own (Redis, Memcached, etc.)
+- Pluggable cache via the `Cache` interface ships with `MemoryCache` or bring your own (Redis, Memcached, etc.)
 - Authorization helpers: `HasRole`, `HasScope`, `HasAllScopes`, `IsAuthorizedParty`
 - Machine-to-machine (client credentials) support via `SkipClientIDCheck`
 - Safe for concurrent use
@@ -65,7 +65,7 @@ defer cache.Close()
 verifier, err := oidcauth.New(ctx, config, oidcauth.WithCache(cache))
 ```
 
-The entry TTL is `min(token.exp, now + duration)` — the cache never serves a token past its own expiry.
+The entry TTL is `min(token.exp, now + duration)` the cache never serves a token past its own expiry.
 
 ### With a custom cache backend
 
@@ -195,7 +195,7 @@ oidcauth.Config{
     // Use for M2M / client-credentials flows where aud does not match.
     SkipClientIDCheck: false,
 
-    // Test-only — do not enable in production.
+    // Test-only do not enable in production.
     SkipIssuerCheck: false,
     SkipExpiryCheck: false,
 }
@@ -212,7 +212,7 @@ oidcauth.Config{
 
 ## Security notes
 
-- Cache keys are SHA-256 hashes of the raw bearer token — raw tokens are never stored in memory as map keys.
+- Cache keys are SHA-256 hashes of the raw bearer token raw tokens are never stored in memory as map keys.
 - `SkipIssuerCheck` and `SkipExpiryCheck` are intended for testing only. Enabling them in production disables core JWT security checks.
 - `SkipClientIDCheck` is legitimate for M2M flows; compensate by validating `azp` and scopes explicitly.
 - `DisableIntrospection` removes server-side revocation detection. Use only when the provider does not expose an introspection endpoint or when latency constraints prevent the extra round-trip, and accept the trade-off.
