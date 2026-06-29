@@ -5,7 +5,7 @@ The `config` package provides configuration loading built on top of Viper. It is
 ## Import
 
 ```go
-import "github.com/raykavin/gokit/config"
+import "github.com/raykavin/gobox/config"
 ```
 
 ## What it provides
@@ -33,7 +33,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/raykavin/gokit/config"
+	"github.com/raykavin/gobox/config"
 )
 
 type AppConfig struct {

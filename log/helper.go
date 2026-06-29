@@ -1,4 +1,4 @@
-package logger
+package log
 
 import (
 	"fmt"
@@ -8,13 +8,13 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
+	zlog "github.com/rs/zerolog/log"
 	"golang.org/x/text/cases"
 )
 
 // createJSONLogger creates a JSON formatted logger
 func createJSONLogger(config *Config) zerolog.Logger {
-	return log.Output(zerolog.ConsoleWriter{
+	return zlog.Output(zerolog.ConsoleWriter{
 		Out:           os.Stdout,
 		NoColor:       !config.Colored,
 		TimeFormat:    config.DateTimeLayout,
@@ -45,7 +45,7 @@ func createConsoleLogger(config *Config) zerolog.Logger {
 		output.FormatErrFieldValue = formatter.formatError
 	}
 
-	return log.Output(output)
+	return zlog.Output(output)
 }
 
 func extractErrorString(i any) string {

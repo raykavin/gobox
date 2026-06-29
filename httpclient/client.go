@@ -1,4 +1,4 @@
-package http
+package httpclient
 
 import (
 	"bytes"
@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	stdhttp "net/http"
+	"net/http"
 	"net/url"
 	"time"
 
@@ -88,11 +88,11 @@ func DefaultCompressedHeaders() MapParams {
 }
 
 // defaultClient is the package-level HTTP client.
-var defaultClient = &stdhttp.Client{Timeout: 30 * time.Second}
+var defaultClient = &http.Client{Timeout: 30 * time.Second}
 
 // NewRequestWithContext builds and executes an HTTP request, returning the
 // raw response body, the status code, and any error.
-// Decompression is not applied automatically — use DecompressResponse if needed.
+// Decompression is not applied automatically use DecompressResponse if needed.
 func NewRequestWithContext(
 	ctx context.Context,
 	method string,
@@ -100,7 +100,7 @@ func NewRequestWithContext(
 	queryParams map[string]string,
 	headers map[string]string,
 	payload []byte,
-	client ...*stdhttp.Client,
+	client ...*http.Client,
 ) ([]byte, int, error) {
 	u, err := url.Parse(urlStr)
 	if err != nil {
@@ -125,7 +125,7 @@ func NewRequestWithContext(
 		reqPayload = bytes.NewReader(payload)
 	}
 
-	req, err := stdhttp.NewRequestWithContext(ctx, method, u.String(), reqPayload)
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), reqPayload)
 	if err != nil {
 		return nil, 0, fmt.Errorf("creating request: %w", err)
 	}
@@ -151,7 +151,7 @@ func NewRequestWithContext(
 // DecompressResponse wraps the response body in the appropriate decompression
 // reader based on the Content-Encoding header.
 // The caller is responsible for closing the returned reader.
-func DecompressResponse(r *stdhttp.Response) (io.ReadCloser, error) {
+func DecompressResponse(r *http.Response) (io.ReadCloser, error) {
 	switch enc := r.Header.Get("Content-Encoding"); enc {
 	case "gzip":
 		gz, err := gzip.NewReader(r.Body)

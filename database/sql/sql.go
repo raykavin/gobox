@@ -1,4 +1,4 @@
-package database
+package sql
 
 import (
 	"context"
@@ -28,7 +28,7 @@ type Connector[T any] struct {
 	scan ScanFunc[T]
 }
 
-// New opens and pings the database described by cfg, then returns a Connector
+// NewSQL opens and pings the database described by cfg, then returns a Connector
 // ready to execute queries. The caller is responsible for calling Close when done.
 func NewSQL[T any](cfg SQLConfig, scan ScanFunc[T]) (*Connector[T], error) {
 	if cfg.Driver == "" {
