@@ -248,8 +248,8 @@ func (e *Engine) setupNoRouteHandler() {
 		}
 
 		c.JSON(http.StatusNotFound, gin.H{
-			"error":   "Não Encontrado",
-			"message": "O recurso solicitado não foi encontrado",
+			"error":   "Not Found",
+			"message": "The requested resource was not found",
 			"path":    c.Request.URL.Path,
 		})
 	})
