@@ -123,11 +123,11 @@ func (o *OIDC) Verify(ctx context.Context, token string) (Claims, error) {
 		return Claims{}, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err)
 	}
 
-	active, err := o.introspect(ctx, token)
+	result, err := o.introspect(ctx, token)
 	if err != nil {
 		return Claims{}, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err)
 	}
-	if !active {
+	if !result.Active {
 		return Claims{}, ErrTokenRevoked
 	}
 
@@ -147,12 +147,41 @@ func (o *OIDC) HasRole(claims Claims, role string) bool {
 	return slices.Contains(clientRoles["roles"], role)
 }
 
+// HasScope reports whether the given claims include the named scope.
+// Scopes in claims.Scope are space-separated per RFC 6749.
+func (o *OIDC) HasScope(claims Claims, scope string) bool {
+	for _, s := range strings.Fields(claims.Scope) {
+		if s == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// HasAllScopes reports whether the given claims include all of the named
+// scopes. Returns true if scopes is empty (vacuous truth).
+func (o *OIDC) HasAllScopes(claims Claims, scopes ...string) bool {
+	for _, scope := range scopes {
+		if !o.HasScope(claims, scope) {
+			return false
+		}
+	}
+	return true
+}
+
+// IsAuthorizedParty reports whether the claims' azp (authorized party) field
+// matches the provided value.
+func (o *OIDC) IsAuthorizedParty(claims Claims, azp string) bool {
+	return claims.Azp == azp
+}
+
 // introspect calls the provider's RFC 7662 introspection endpoint and returns
-// the token's "active" flag.
-func (o *OIDC) introspect(ctx context.Context, token string) (bool, error) {
+// the full Introspection result. Callers should check result.Active to
+// determine whether the token is still valid server-side.
+func (o *OIDC) introspect(ctx context.Context, token string) (Introspection, error) {
 	introspectURL, err := url.JoinPath(o.config.RealmURL, introspectEndpoint)
 	if err != nil {
-		return false, fmt.Errorf("%w: building URL: %w", ErrIntrospectionFailed, err)
+		return Introspection{}, fmt.Errorf("%w: building URL: %w", ErrIntrospectionFailed, err)
 	}
 
 	form := url.Values{}
@@ -160,7 +189,7 @@ func (o *OIDC) introspect(ctx context.Context, token string) (bool, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, introspectURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return false, fmt.Errorf("%w: building request: %w", ErrIntrospectionFailed, err)
+		return Introspection{}, fmt.Errorf("%w: building request: %w", ErrIntrospectionFailed, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
@@ -168,18 +197,18 @@ func (o *OIDC) introspect(ctx context.Context, token string) (bool, error) {
 
 	resp, err := o.httpClient.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("%w: %w", ErrIntrospectionFailed, err)
+		return Introspection{}, fmt.Errorf("%w: %w", ErrIntrospectionFailed, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("%w: unexpected status %d", ErrIntrospectionFailed, resp.StatusCode)
+		return Introspection{}, fmt.Errorf("%w: unexpected status %d", ErrIntrospectionFailed, resp.StatusCode)
 	}
 
 	var out Introspection
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
-		return false, fmt.Errorf("%w: decoding response: %w", ErrIntrospectionFailed, err)
+		return Introspection{}, fmt.Errorf("%w: decoding response: %w", ErrIntrospectionFailed, err)
 	}
 
-	return out.Active, nil
+	return out, nil
 }
