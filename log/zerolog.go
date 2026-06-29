@@ -118,7 +118,7 @@ func (zl *Zerolog) Benchmark(name string, duration time.Duration) {
 	msg := "Benchmark:"
 
 	zl.Debug().
-		Str("duracao", duration.String()).
+		Str("duration", duration.String()).
 		Msgf("%s %s", msg, name)
 }
 
@@ -127,9 +127,9 @@ func (zl *Zerolog) API(method, path, remoteAddr string, statusCode int, duration
 	// Basic validation of required parameters.
 	if method == "" || path == "" {
 		zl.Logger.Error().
-			Str("metodo", method).
-			Str("caminho", path).
-			Msg("parâmetros inválidos para log API")
+			Str("method", method).
+			Str("path", path).
+			Msg("invalid parameters for API log")
 		return
 	}
 
@@ -141,15 +141,15 @@ func (zl *Zerolog) API(method, path, remoteAddr string, statusCode int, duration
 	}
 
 	// Prepare the message
-	message := "Requisição API"
+	message := "API Request"
 	formattedDuration := duration.Round(time.Millisecond).String()
 
 	logger.WithLevel(zl.getStatusLevel(statusCode)).
-		Str("metodo", method).
-		Str("caminho", path).
-		Str("endereco_remoto", remoteAddr).
+		Str("method", method).
+		Str("path", path).
+		Str("remote_addr", remoteAddr).
 		Int("status", statusCode).
-		Str("duracao", formattedDuration).
+		Str("duration", formattedDuration).
 		Msg(message)
 }
 
