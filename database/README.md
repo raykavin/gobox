@@ -11,7 +11,7 @@ This split allows consumers to choose the abstraction level they need while keep
 ## Import
 
 ```go
-import "github.com/raykavin/gokit/database"
+import "github.com/raykavin/gobox/database"
 ```
 
 ## What it provides
@@ -51,7 +51,7 @@ import (
 
 	_ "<your-driver>"
 
-	"github.com/raykavin/gokit/database"
+	"github.com/raykavin/gobox/database"
 )
 
 type User struct {
@@ -102,7 +102,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/raykavin/gokit/database"
+	"github.com/raykavin/gobox/database"
 )
 
 func main() {
@@ -151,7 +151,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/raykavin/gokit/database"
+	"github.com/raykavin/gobox/database"
 )
 
 type User struct {
