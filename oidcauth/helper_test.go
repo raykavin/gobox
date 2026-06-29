@@ -37,12 +37,36 @@ func TestValidateConfig(t *testing.T) {
 			wantErr: ErrEmptyClientID,
 		},
 		{
-			name:   "valid HTTPS config",
-			config: Config{RealmURL: "https://kc.example.com/realms/main", ClientID: "app"},
+			name: "missing ClientSecret with introspection enabled",
+			config: Config{
+				RealmURL: "https://kc.example.com/realms/main",
+				ClientID: "app",
+			},
+			wantErr: ErrMissingClientSecret,
 		},
 		{
-			name:   "valid HTTP config",
-			config: Config{RealmURL: "http://localhost:8080/realms/main", ClientID: "app"},
+			name: "missing ClientSecret allowed when introspection disabled",
+			config: Config{
+				RealmURL:             "https://kc.example.com/realms/main",
+				ClientID:             "app",
+				DisableIntrospection: true,
+			},
+		},
+		{
+			name: "valid HTTPS config",
+			config: Config{
+				RealmURL:     "https://kc.example.com/realms/main",
+				ClientID:     "app",
+				ClientSecret: "secret",
+			},
+		},
+		{
+			name: "valid HTTP config",
+			config: Config{
+				RealmURL:     "http://localhost:8080/realms/main",
+				ClientID:     "app",
+				ClientSecret: "secret",
+			},
 		},
 	}
 
@@ -63,7 +87,11 @@ func TestValidateConfig(t *testing.T) {
 }
 
 func TestValidateConfig_AppliesDefaultTimeout(t *testing.T) {
-	cfg := Config{RealmURL: "https://kc.example.com/realms/main", ClientID: "app"}
+	cfg := Config{
+		RealmURL:     "https://kc.example.com/realms/main",
+		ClientID:     "app",
+		ClientSecret: "secret",
+	}
 	if err := validateConfig(&cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -76,6 +104,7 @@ func TestValidateConfig_PreservesCustomTimeout(t *testing.T) {
 	cfg := Config{
 		RealmURL:       "https://kc.example.com/realms/main",
 		ClientID:       "app",
+		ClientSecret:   "secret",
 		RequestTimeout: 10 * time.Second,
 	}
 	if err := validateConfig(&cfg); err != nil {

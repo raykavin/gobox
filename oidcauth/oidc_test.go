@@ -184,7 +184,11 @@ func TestNew_ProviderInitFailure(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := New(context.Background(), Config{RealmURL: srv.URL, ClientID: "app"})
+	_, err := New(context.Background(), Config{
+		RealmURL:     srv.URL,
+		ClientID:     "app",
+		ClientSecret: "secret",
+	})
 	if !errors.Is(err, ErrProviderInitFailed) {
 		t.Errorf("expected ErrProviderInitFailed, got %v", err)
 	}
@@ -527,5 +531,76 @@ func TestIsAuthorizedParty_BothEmpty(t *testing.T) {
 	v := &OIDC{config: Config{ClientID: "app"}}
 	if !v.IsAuthorizedParty(Claims{Azp: ""}, "") {
 		t.Error("expected true when both azp values are empty strings")
+	}
+}
+
+func TestNew_MissingClientSecretWhenIntrospectionEnabled(t *testing.T) {
+	mp := newMockProvider(t)
+	_, err := New(context.Background(), Config{
+		RealmURL:        mp.issuer(),
+		ClientID:        "test-client",
+		SkipExpiryCheck: true,
+		// ClientSecret intentionally empty, introspection enabled (default).
+	})
+	if !errors.Is(err, ErrMissingClientSecret) {
+		t.Errorf("expected ErrMissingClientSecret, got %v", err)
+	}
+}
+
+func TestNew_NoClientSecretRequiredWhenIntrospectionDisabled(t *testing.T) {
+	mp := newMockProvider(t)
+	_, err := New(context.Background(), Config{
+		RealmURL:             mp.issuer(),
+		ClientID:             "test-client",
+		SkipExpiryCheck:      true,
+		DisableIntrospection: true,
+		// ClientSecret empty is allowed here.
+	})
+	if err != nil {
+		t.Errorf("expected no error when introspection is disabled, got %v", err)
+	}
+}
+
+func TestVerify_DisableIntrospectionSkipsCall(t *testing.T) {
+	mp := newMockProvider(t)
+	v, err := New(context.Background(), Config{
+		RealmURL:             mp.issuer(),
+		ClientID:             "test-client",
+		SkipExpiryCheck:      true,
+		DisableIntrospection: true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	token := mp.makeToken(t, validClaims(mp))
+	if _, err := v.Verify(context.Background(), token); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if mp.introspectCount() != 0 {
+		t.Errorf("expected 0 introspect calls when disabled, got %d", mp.introspectCount())
+	}
+}
+
+func TestVerify_DisableIntrospectionIgnoresRevocation(t *testing.T) {
+	mp := newMockProvider(t)
+	mp.setActive(false) // provider would report revoked, but we never ask.
+	v, err := New(context.Background(), Config{
+		RealmURL:             mp.issuer(),
+		ClientID:             "test-client",
+		SkipExpiryCheck:      true,
+		DisableIntrospection: true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	token := mp.makeToken(t, validClaims(mp))
+	claims, err := v.Verify(context.Background(), token)
+	if err != nil {
+		t.Fatalf("expected valid token when introspection disabled, got %v", err)
+	}
+	if claims.Sub != "user-123" {
+		t.Errorf("Sub = %q, want user-123", claims.Sub)
 	}
 }
