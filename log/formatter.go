@@ -1,4 +1,4 @@
-package logger
+package log
 
 import (
 	"fmt"
@@ -155,8 +155,6 @@ func (*consoleFormatter) formatError(i any) string {
 	}
 
 	var result strings.Builder
-	// errStyle := color.New(color.FgHiRed, color.Bold)
-	// _, _ = result.WriteString(errStyle.Sprint("\nDetalhes do Erro:"))
 
 	parts := strings.Split(errStr, "]: ")
 

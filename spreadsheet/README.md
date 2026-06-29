@@ -5,7 +5,7 @@ The `spreadsheet` package provides a lightweight writer for CSV and XLSX exports
 ## Import
 
 ```go
-import "github.com/raykavin/gokit/spreadsheet"
+import "github.com/raykavin/gobox/spreadsheet"
 ```
 
 ## What it provides
@@ -38,7 +38,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/raykavin/gokit/spreadsheet"
+	"github.com/raykavin/gobox/spreadsheet"
 )
 
 func main() {
@@ -85,7 +85,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/raykavin/gokit/spreadsheet"
+	"github.com/raykavin/gobox/spreadsheet"
 )
 
 func main() {

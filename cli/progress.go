@@ -1,4 +1,4 @@
-package terminal
+package cli
 
 import (
 	"fmt"
@@ -127,7 +127,7 @@ func (p *Progress) Fail(idx int, msg string) {
 }
 
 // Start begins the 100 ms background render loop.
-// Safe to call multiple times — only the first call has effect.
+// Safe to call multiple times only the first call has effect.
 func (p *Progress) Start() {
 	p.once.Do(func() {
 		_, _ = fmt.Fprintln(p.out)
@@ -150,7 +150,7 @@ func (p *Progress) Start() {
 }
 
 // Stop halts the render loop, waits for it to exit, then performs a final render.
-// Safe to call multiple times — only the first call has effect.
+// Safe to call multiple times only the first call has effect.
 func (p *Progress) Stop() {
 	p.once.Do(func() {}) // ensure Start's once is consumed if Stop is called first
 	select {

@@ -1,4 +1,4 @@
-package database
+package gorm
 
 import (
 	"database/sql"
@@ -16,7 +16,7 @@ import (
 	glog "gorm.io/gorm/logger"
 )
 
-// Config holds database configuration
+// GormConfig holds database configuration
 type GormConfig struct {
 	DSN             string        // Data Source Name for the database connection
 	Dialector       string        // Database dialector (e.g., "postgres", "mysql", "sqlite", "sqlserver")
@@ -38,7 +38,7 @@ type GormConfig struct {
 	GormConfig *gorm.Config
 }
 
-// DefaultGormConfig returns a Config with sensible defaults
+// DefaultGormConfig returns a GormConfig with sensible defaults
 func DefaultGormConfig() *GormConfig {
 	return &GormConfig{
 		MaxOpenConns:    50,
@@ -54,8 +54,8 @@ func DefaultGormConfig() *GormConfig {
 	}
 }
 
-// NewGorm initializes database with detailed configuration
-func NewGorm(cfg *GormConfig) (*gorm.DB, error) {
+// New initializes a GORM database connection with the given configuration.
+func New(cfg *GormConfig) (*gorm.DB, error) {
 	if cfg == nil {
 		return nil, ErrInvalidDatabaseConfig
 	}

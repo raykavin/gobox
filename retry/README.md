@@ -5,7 +5,7 @@ The `retry` package provides a small helper for retrying operations that may fai
 ## Import
 
 ```go
-import "github.com/raykavin/gokit/retry"
+import "github.com/raykavin/gobox/retry"
 ```
 
 ## What it provides
@@ -30,7 +30,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/raykavin/gokit/retry"
+	"github.com/raykavin/gobox/retry"
 )
 
 var errTemporary = errors.New("temporary upstream failure")

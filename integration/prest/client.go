@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/raykavin/gokit/http"
+	"github.com/raykavin/gobox/httpclient"
 )
 
 // tokenExpiryBuffer is subtracted from the token's expiry time to avoid using
@@ -88,10 +88,10 @@ func (c *Client[T]) Get(ctx context.Context, endpoint string, params map[string]
 		return zero, fmt.Errorf("authenticating: %w", err)
 	}
 
-	headers := http.DefaultJSONHeaders()
-	headers.Set(http.HeaderAuthorization, fmt.Sprintf("%s %s", c.auth.TokenType, c.auth.AccessToken))
+	headers := httpclient.DefaultJSONHeaders()
+	headers.Set(httpclient.HeaderAuthorization, fmt.Sprintf("%s %s", c.auth.TokenType, c.auth.AccessToken))
 
-	return do[T](ctx, endpoint, stdhttp.MethodGet, http.MapParams(params), headers, nil, c.client)
+	return do[T](ctx, endpoint, stdhttp.MethodGet, httpclient.MapParams(params), headers, nil, c.client)
 }
 
 // GetPaginated sends a GET request with limit/offset pagination query params.
@@ -115,8 +115,8 @@ func (c *Client[T]) authenticate(ctx context.Context) error {
 	q.Set("grant_type", c.grantType)
 	q.Set("scope", c.scope)
 
-	headers := http.DefaultFormHeaders()
-	headers.Set(http.HeaderAccept, http.MIMEApplicationJSON)
+	headers := httpclient.DefaultFormHeaders()
+	headers.Set(httpclient.HeaderAccept, httpclient.MIMEApplicationJSON)
 
 	auth, err := do[authentication](
 		ctx,
@@ -158,7 +158,7 @@ func do[T any](
 ) (T, error) {
 	var zero T
 
-	body, statusCode, err := http.NewRequestWithContext(
+	body, statusCode, err := httpclient.NewRequestWithContext(
 		ctx,
 		method,
 		endpoint,
