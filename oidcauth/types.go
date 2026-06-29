@@ -38,12 +38,18 @@ type Introspection struct {
 // Config controls how the OIDC verifier connects to the identity provider and
 // validates tokens. RealmURL and ClientID are required; everything else has a
 // sensible default.
+//
+// Introspection is enabled by default. When enabled, ClientSecret is required
+// and Verify performs a remote RFC 7662 introspection call to detect
+// revoked-but-not-yet-expired tokens. Set DisableIntrospection to rely solely
+// on local JWT verification (no revocation detection, no provider round-trip).
 type Config struct {
-	RealmURL          string        // Issuer URL (e.g. https://kc.example.com/realms/main).
-	ClientID          string        // OAuth client ID used for audience checks and introspection auth.
-	ClientSecret      string        // Confidential client secret used for introspection.
-	RequestTimeout    time.Duration // HTTP timeout for provider calls. Defaults to 30s.
-	SkipIssuerCheck   bool          // Disable iss claim validation (test-only).
-	SkipClientIDCheck bool          // Disable aud claim validation against ClientID (test-only).
-	SkipExpiryCheck   bool          // Disable exp claim validation (test-only).
+	RealmURL             string        // Issuer URL (e.g. https://kc.example.com/realms/main).
+	ClientID             string        // OAuth client ID used for audience checks and introspection auth.
+	ClientSecret         string        // Confidential client secret used for introspection. Required unless DisableIntrospection is set.
+	RequestTimeout       time.Duration // HTTP timeout for provider calls. Defaults to 30s.
+	SkipIssuerCheck      bool          // Disable iss claim validation (test-only).
+	SkipClientIDCheck    bool          // Disable aud claim validation against ClientID (test-only).
+	SkipExpiryCheck      bool          // Disable exp claim validation (test-only).
+	DisableIntrospection bool          // Skip remote RFC 7662 introspection in Verify; rely only on local JWT verification.
 }

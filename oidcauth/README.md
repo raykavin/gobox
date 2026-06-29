@@ -5,7 +5,7 @@ OpenID Connect token verification for Go, with optional in-memory caching and au
 ## Features
 
 - JWT verification (signature, issuer, audience, expiry) via [`go-oidc`](https://github.com/coreos/go-oidc)
-- RFC 7662 token introspection to detect server-side revocation
+- RFC 7662 token introspection to detect server-side revocation (opt-out via `DisableIntrospection`)
 - Pluggable cache via the `Cache` interface — ships with `MemoryCache` or bring your own (Redis, Memcached, etc.)
 - Authorization helpers: `HasRole`, `HasScope`, `HasAllScopes`, `IsAuthorizedParty`
 - Machine-to-machine (client credentials) support via `SkipClientIDCheck`
@@ -22,6 +22,7 @@ go get github.com/raykavin/gobox/oidcauth
 ### Basic
 
 Every call to `Verify` performs a full JWT check plus a remote introspection request.
+`ClientSecret` is required when introspection is enabled (the default).
 
 ```go
 verifier, err := oidcauth.New(ctx, oidcauth.Config{
@@ -39,6 +40,18 @@ if err != nil {
 }
 
 fmt.Println(claims.PreferredUsername)
+```
+
+### Without introspection
+
+Set `DisableIntrospection: true` to skip the remote RFC 7662 call and rely solely on local JWT verification. In this mode `ClientSecret` is not required, but revoked tokens will not be detected until they expire.
+
+```go
+verifier, err := oidcauth.New(ctx, oidcauth.Config{
+    RealmURL:             "https://keycloak.example.com/realms/main",
+    ClientID:             "my-app",
+    DisableIntrospection: true,
+})
 ```
 
 ### With MemoryCache
@@ -158,6 +171,7 @@ case err != nil:
 |---|---|
 | `ErrInvalidRealmURL` | `RealmURL` is empty or not a valid HTTP(S) URL |
 | `ErrEmptyClientID` | `ClientID` is empty |
+| `ErrMissingClientSecret` | `ClientSecret` not set and introspection is enabled |
 | `ErrProviderInitFailed` | OIDC discovery request failed |
 | `ErrTokenValidationFailed` | JWT signature, issuer, audience, or expiry check failed |
 | `ErrIntrospectionFailed` | Introspection endpoint unreachable or returned unexpected status |
@@ -167,10 +181,15 @@ case err != nil:
 
 ```go
 oidcauth.Config{
-    RealmURL:      "https://keycloak.example.com/realms/main", // required
-    ClientID:      "my-app",                                   // required
-    ClientSecret:  "secret",                                   // required for introspection
-    RequestTimeout: 10 * time.Second,                          // default: 30s
+    RealmURL:     "https://keycloak.example.com/realms/main", // required
+    ClientID:     "my-app",                                   // required
+    ClientSecret: "secret",                                   // required unless DisableIntrospection is set
+    RequestTimeout: 10 * time.Second,                         // default: 30s
+
+    // DisableIntrospection skips the remote RFC 7662 call in Verify.
+    // Revoked tokens will not be detected until their exp claim elapses.
+    // ClientSecret is not required when this is true.
+    DisableIntrospection: false,
 
     // SkipClientIDCheck disables audience validation against ClientID.
     // Use for M2M / client-credentials flows where aud does not match.
@@ -196,4 +215,5 @@ oidcauth.Config{
 - Cache keys are SHA-256 hashes of the raw bearer token — raw tokens are never stored in memory as map keys.
 - `SkipIssuerCheck` and `SkipExpiryCheck` are intended for testing only. Enabling them in production disables core JWT security checks.
 - `SkipClientIDCheck` is legitimate for M2M flows; compensate by validating `azp` and scopes explicitly.
+- `DisableIntrospection` removes server-side revocation detection. Use only when the provider does not expose an introspection endpoint or when latency constraints prevent the extra round-trip, and accept the trade-off.
 - Revoked tokens remain valid for up to `CacheDuration` when caching is enabled. Choose a TTL that matches your revocation latency requirements.
