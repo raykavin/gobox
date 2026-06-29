@@ -123,7 +123,7 @@ func (tm *TokenManager) WithOptionalParams(params map[string]string) {
 func (tm *TokenManager) authenticate(ctx context.Context, scope string) error {
 	u, err := url.Parse(tm.authUrl)
 	if err != nil {
-		return fmt.Errorf("URL de autenticação inválida: %v", err)
+		return fmt.Errorf("invalid authentication URL: %v", err)
 	}
 
 	// Set url queries
@@ -154,7 +154,7 @@ func (tm *TokenManager) authenticate(ctx context.Context, scope string) error {
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, sendMethod, u.String(), requestBody)
 	if err != nil {
-		return fmt.Errorf("erro ao criar requisição de autenticação: %v", err)
+		return fmt.Errorf("failed to create authentication request: %v", err)
 	}
 
 	// Set headers
@@ -169,31 +169,31 @@ func (tm *TokenManager) authenticate(ctx context.Context, scope string) error {
 	// Send request
 	resp, err := tm.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("erro ao enviar requisição de autenticação: %v", err)
+		return fmt.Errorf("failed to send authentication request: %v", err)
 	}
 
 	defer resp.Body.Close()
 
 	reader, err := httpclient.DecompressResponse(resp)
 	if err != nil {
-		return fmt.Errorf("erro ao descomprimir resposta: %v", err)
+		return fmt.Errorf("failed to decompress response: %v", err)
 	}
 
 	// Read response body
 	body, err := io.ReadAll(reader)
 	if err != nil {
-		return fmt.Errorf("erro ao ler corpo da resposta: %v", err)
+		return fmt.Errorf("failed to read response body: %v", err)
 	}
 
 	// Check status code error
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("requisição de autenticação retornou código de status de erro: %d", resp.StatusCode)
+		return fmt.Errorf("authentication request returned error status code: %d", resp.StatusCode)
 	}
 
 	// Decode body data
 	var tokenAccess TokenAccess
 	if err := json.Unmarshal(body, &tokenAccess); err != nil {
-		return fmt.Errorf("erro ao decodificar corpo da resposta: %v", err)
+		return fmt.Errorf("failed to decode response body: %v", err)
 	}
 
 	now := time.Now().Add(-5 * time.Second)
@@ -208,7 +208,7 @@ func (tm *TokenManager) authenticate(ctx context.Context, scope string) error {
 // getAccessToken returns a valid token from cache or request a new
 func (tm *TokenManager) getAccessToken(ctx context.Context, scope string) (*TokenAccess, error) {
 	if scope == "" {
-		return nil, fmt.Errorf("escopo de acesso inválido")
+		return nil, fmt.Errorf("invalid access scope")
 	}
 
 	tokenScope := tm.getTokenFromScope(scope)

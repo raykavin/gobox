@@ -54,7 +54,7 @@ func (f *consoleFormatter) formatUnknownLevel() string {
 func (f *consoleFormatter) formatMessage(i any) string {
 	msg, ok := i.(string)
 	if !ok || len(msg) == 0 {
-		return messageColor.Sprint("│ (mensagem vazia)")
+		return messageColor.Sprint("│ (empty message)")
 	}
 
 	// Handle multiline messages
@@ -214,11 +214,11 @@ func (*consoleFormatter) formatFieldValue(i any) string {
 		return fieldValColor.Sprintf("=%.2f", v)
 	case bool:
 		if v {
-			return "=" + color.HiGreenString("verdadeiro")
+			return "=" + color.HiGreenString("true")
 		}
-		return "=" + color.HiRedString("falso")
+		return "=" + color.HiRedString("false")
 	case nil:
-		return "=" + color.HiBlackString("nulo")
+		return "=" + color.HiBlackString("null")
 	default:
 		return fieldValColor.Sprintf("=%v", v)
 	}
