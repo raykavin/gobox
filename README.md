@@ -85,6 +85,26 @@ import "github.com/raykavin/gobox/retry"
 
 A good rule of thumb: move code here when it appears in more than one service, represents generic infrastructure logic, and carries no business-domain coupling. Keep domain rules in the application.
 
+## Contributing
+
+Contributions to gobox are welcome! Here are some ways you can help:
+
+- **Report bugs and suggest features** by opening issues on GitHub
+- **Submit pull requests** with bug fixes or new features
+- **Improve documentation** to help other users and developers
+
+---
+
 ## License
 
-MIT
+gobox is distributed under the **MIT License**.  
+For complete license terms and conditions, see the [LICENSE](LICENSE) file in the repository.
+
+---
+
+## Contact
+
+For support, collaboration, or questions about gobox:
+
+**Email**: [raykavin.meireles@gmail.com](mailto:raykavin.meireles@gmail.com)  
+**GitHub**: [@raykavin](https://github.com/raykavin)
