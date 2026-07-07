@@ -1,6 +1,8 @@
 package pagination
 
-import "strings"
+import (
+	"strings"
+)
 
 type Operator string
 
@@ -73,7 +75,7 @@ func (b *FilterBuilder) Where(field string, op Operator, value any) *FilterBuild
 	b.filters = append(b.filters, Filter{
 		Field: field,
 		Op:    op,
-		Value: value,
+		Value: derefVal(value),
 	})
 	return b
 }
