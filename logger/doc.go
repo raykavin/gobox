@@ -1,4 +1,5 @@
-// Package log provides a structured logger built on top of zerolog with
+//	package logger provides a structured logger built on top of zerolog with
+//
 // colored console output, JSON mode, API request logging, and field helpers.
 //
 // # Creating a logger
@@ -30,4 +31,4 @@
 // # API request logging
 //
 //	zl.API(r.Method, r.URL.Path, r.RemoteAddr, status, duration)
-package log
+package logger
