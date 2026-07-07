@@ -34,6 +34,26 @@ func Scope(q Query, total *int64) func(*gorm.DB) *gorm.DB {
 			Offset(q.Page.Offset())
 	}
 }
+
+// FilterScope returns a GORM scope that applies only the given filters,
+// without pagination or sorting. Useful for First/Take style lookups
+// that share the FilterBuilder API
+//
+//	var user User
+//
+//	filters := paginator.NewFilterBuilder().
+//	    Where("email", paginator.Eq, "user@example.com").
+//	    Build()
+//
+//	db.Model(&User{}).
+//	    Scopes(paginator.FilterScope(filters)).
+//	    First(&user)
+func FilterScope(filters []Filter) func(*gorm.DB) *gorm.DB {
+	return func(db *gorm.DB) *gorm.DB {
+		return applyFilters(db, filters)
+	}
+}
+
 func applyFilters(db *gorm.DB, filters []Filter) *gorm.DB {
 	for _, f := range filters {
 		switch f.Op {
