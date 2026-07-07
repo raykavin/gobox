@@ -22,18 +22,18 @@ import (
 func Scope(q Query, total *int64) func(*gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
 		db = applyFilters(db, q.Filters)
-		db = applySorts(db, q.Sorts)
 
-		// Count on a cloned session so we
-		// don't mutate the main query statement.
+		// Count before sorting: ORDER BY is irrelevant for COUNT(*)
+		// and just adds planner work on the counting query.
 		db.Session(&gorm.Session{}).Count(total)
+
+		db = applySorts(db, q.Sorts)
 
 		return db.
 			Limit(q.Page.PerPage).
 			Offset(q.Page.Offset())
 	}
 }
-
 func applyFilters(db *gorm.DB, filters []Filter) *gorm.DB {
 	for _, f := range filters {
 		switch f.Op {
@@ -44,7 +44,9 @@ func applyFilters(db *gorm.DB, filters []Filter) *gorm.DB {
 		case In, NotIn:
 			db = db.Where(fmt.Sprintf("%s %s (?)", f.Field, f.Op), f.Value)
 		case Like, ILike:
-			db = db.Where(fmt.Sprintf("%s %s ?", f.Field, f.Op), fmt.Sprintf("%%%v%%", f.Value))
+			db = db.Where(fmt.Sprintf("%s %s ?", f.Field, f.Op),
+				fmt.Sprintf("%%%v%%", derefVal(f.Value)),
+			)
 		default:
 			db = db.Where(fmt.Sprintf("%s %s ?", f.Field, f.Op), f.Value)
 		}
