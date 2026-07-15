@@ -65,7 +65,7 @@ func applyFilters(db *gorm.DB, filters []Filter) *gorm.DB {
 			db = db.Where(fmt.Sprintf("%s %s (?)", f.Field, f.Op), f.Value)
 		case Like, ILike:
 			db = db.Where(fmt.Sprintf("%s %s ?", f.Field, f.Op),
-				fmt.Sprintf("%%%v%%", derefVal(f.Value)),
+				fmt.Sprintf("%%%s%%", escapeLikeValue(derefVal(f.Value))),
 			)
 		default:
 			db = db.Where(fmt.Sprintf("%s %s ?", f.Field, f.Op), f.Value)
@@ -83,4 +83,12 @@ func applySorts(db *gorm.DB, sorts []Sort) *gorm.DB {
 		db = db.Order(fmt.Sprintf("%s %s", s.Field, dir))
 	}
 	return db
+}
+
+// escapeLikeValue escapes LIKE/ILIKE wildcards so user input
+// is matched literally inside the surrounding %...%
+func escapeLikeValue(v any) string {
+	s := fmt.Sprintf("%v", v)
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }

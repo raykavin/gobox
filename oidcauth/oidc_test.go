@@ -53,7 +53,7 @@ func (m *mockProvider) issuer() string { return m.server.URL }
 func (m *mockProvider) serveDiscovery(w http.ResponseWriter, r *http.Request) {
 	base := m.server.URL
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"issuer":                                base,
 		"jwks_uri":                              base + "/protocol/openid-connect/certs",
 		"authorization_endpoint":                base + "/protocol/openid-connect/auth",
@@ -69,7 +69,7 @@ func (m *mockProvider) serveJWKS(w http.ResponseWriter, r *http.Request) {
 	n := base64.RawURLEncoding.EncodeToString(pub.N.Bytes())
 	e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes())
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"keys": []map[string]interface{}{
 			{"kty": "RSA", "alg": "RS256", "use": "sig", "kid": m.keyID, "n": n, "e": e},
 		},
@@ -86,7 +86,7 @@ func (m *mockProvider) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if status == http.StatusOK {
-		json.NewEncoder(w).Encode(map[string]bool{"active": active})
+		_ = json.NewEncoder(w).Encode(map[string]bool{"active": active})
 	}
 }
 
@@ -358,7 +358,7 @@ func TestIntrospect_HTTPError(t *testing.T) {
 func TestIntrospect_InvalidJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("not-valid-json"))
+		_, _ = w.Write([]byte("not-valid-json"))
 	}))
 	t.Cleanup(srv.Close)
 
