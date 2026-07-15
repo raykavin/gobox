@@ -128,7 +128,7 @@ func (w *Writer) writeXLSX(ctx context.Context, sheets []Sheet) ([]byte, error) 
 
 		if firstSheet {
 			if defaultTab != name {
-				f.SetSheetName(defaultTab, name)
+				_ = f.SetSheetName(defaultTab, name)
 			}
 			firstSheet = false
 		} else {
