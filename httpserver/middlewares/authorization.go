@@ -23,6 +23,12 @@ const (
 
 	accessTokenChunksCountSuffix = ".__chunks"
 	accessTokenChunkSeparator    = ".__chunk."
+
+	// maxCookieValueBytes keeps a single cookie's value comfortably under
+	// the ~4096-byte-per-cookie limit browsers enforce. Exceeding it doesn't
+	// error: the browser silently drops the whole Set-Cookie, which is why
+	// handler.Auth chunks anything larger instead of risking that.
+	maxCookieValueBytes = 3500
 )
 
 var (
