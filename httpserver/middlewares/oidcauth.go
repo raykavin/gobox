@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -260,7 +261,7 @@ func (h *Auth) applyToken(ctx *gin.Context, token *oauth2.Token) {
 	if accessTTL <= 0 {
 		accessTTL = h.accessCookieDefaultTTL
 	}
-	h.setCookie(ctx, AccessTokenCookie, token.AccessToken, accessTTL, true)
+	h.setChunkedCookie(ctx, AccessTokenCookie, token.AccessToken, accessTTL, true)
 
 	refreshTTL := h.refreshCookieDefaultTTL
 	if secs, ok := token.Extra("refresh_expires_in").(float64); ok && secs > 0 {
@@ -281,7 +282,7 @@ func (h *Auth) applyToken(ctx *gin.Context, token *oauth2.Token) {
 
 // clearAuthCookies removes every cookie a signed-in session relies on.
 func (h *Auth) clearAuthCookies(ctx *gin.Context) {
-	h.clearCookie(ctx, AccessTokenCookie)
+	h.clearChunkedCookie(ctx, AccessTokenCookie)
 	h.clearCookie(ctx, refreshTokenCookie)
 	h.clearCookie(ctx, idTokenCookie)
 	h.clearCookie(ctx, CSRFCookie)
@@ -317,6 +318,75 @@ func (h *Auth) clearCookie(ctx *gin.Context, name string) {
 		Secure:   h.cookies.Secure,
 		SameSite: h.cookies.SameSite,
 	})
+}
+
+// setChunkedCookie writes value as a single cookie when it fits under
+// maxCookieValueBytes, or splits it across name+accessTokenChunkSeparator+i
+// chunk cookies plus a name+accessTokenChunksCountSuffix count when it
+// doesn't — the layout readAccessTokenCookie already knows how to
+// reassemble. Either way, it also clears whatever chunk cookies a previous,
+// larger value left behind that the current one no longer needs.
+func (h *Auth) setChunkedCookie(ctx *gin.Context, name, value string, maxAge time.Duration, httpOnly bool) {
+	previousChunks := previousChunkCount(ctx, name)
+
+	if len(value) <= maxCookieValueBytes {
+		h.setCookie(ctx, name, value, maxAge, httpOnly)
+		h.clearCookie(ctx, name+accessTokenChunksCountSuffix)
+		h.clearChunkRange(ctx, name, 0, previousChunks)
+		return
+	}
+
+	// The reassembled value only ever comes from concatenating chunks, so
+	// a stale plain cookie must not be left for readAccessTokenCookie's
+	// unchunked branch to pick up instead.
+	h.clearCookie(ctx, name)
+
+	chunks := chunkString(value, maxCookieValueBytes)
+	for i, chunk := range chunks {
+		h.setCookie(ctx, name+accessTokenChunkSeparator+strconv.Itoa(i), chunk, maxAge, httpOnly)
+	}
+	h.setCookie(ctx, name+accessTokenChunksCountSuffix, strconv.Itoa(len(chunks)), maxAge, httpOnly)
+	h.clearChunkRange(ctx, name, len(chunks), previousChunks)
+}
+
+// clearChunkedCookie removes name along with its chunk-count cookie and
+// every chunk cookie a previous value may have written.
+func (h *Auth) clearChunkedCookie(ctx *gin.Context, name string) {
+	h.clearCookie(ctx, name)
+	h.clearCookie(ctx, name+accessTokenChunksCountSuffix)
+	h.clearChunkRange(ctx, name, 0, previousChunkCount(ctx, name))
+}
+
+// clearChunkRange clears chunk cookies name+accessTokenChunkSeparator+i for
+// i in [from, to). Used to drop leftovers a previous, larger value wrote
+// that the current one no longer needs.
+func (h *Auth) clearChunkRange(ctx *gin.Context, name string, from, to int) {
+	for i := from; i < to; i++ {
+		h.clearCookie(ctx, name+accessTokenChunkSeparator+strconv.Itoa(i))
+	}
+}
+
+// previousChunkCount reads the chunk count a previous setChunkedCookie call
+// left in the request's cookies, or 0 if there is none (or it's malformed).
+func previousChunkCount(ctx *gin.Context, name string) int {
+	raw, err := ctx.Cookie(name + accessTokenChunksCountSuffix)
+	if err != nil || raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// chunkString splits value into slices of at most size bytes each.
+func chunkString(value string, size int) []string {
+	chunks := make([]string, 0, (len(value)+size-1)/size)
+	for start := 0; start < len(value); start += size {
+		chunks = append(chunks, value[start:min(start+size, len(value))])
+	}
+	return chunks
 }
 
 // randomToken returns nBytes of entropy, base64url-encoded. It panics on
