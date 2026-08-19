@@ -3,6 +3,7 @@ package oidcauth
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/url"
 )
 
@@ -29,9 +30,18 @@ func validateConfig(config *Config) error {
 	if !config.DisableIntrospection && config.ClientSecret == "" {
 		return ErrMissingClientSecret
 	}
+	if config.IntrospectionCacheTTL < 0 {
+		return fmt.Errorf("%w: introspection cache TTL cannot be negative", ErrInvalidOIDCConfiguration)
+	}
+	if config.IntrospectionHTTPTimeout < 0 {
+		return fmt.Errorf("%w: introspection HTTP timeout cannot be negative", ErrInvalidOIDCConfiguration)
+	}
 
 	if config.RequestTimeout <= 0 {
 		config.RequestTimeout = defaultRequestTimeout
+	}
+	if config.IntrospectionHTTPTimeout == 0 {
+		config.IntrospectionHTTPTimeout = defaultIntrospectionHTTPTimeout
 	}
 	return nil
 }

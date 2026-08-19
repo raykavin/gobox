@@ -58,6 +58,7 @@ func (m *mockProvider) serveDiscovery(w http.ResponseWriter, r *http.Request) {
 		"jwks_uri":                              base + "/protocol/openid-connect/certs",
 		"authorization_endpoint":                base + "/protocol/openid-connect/auth",
 		"token_endpoint":                        base + "/protocol/openid-connect/token",
+		"introspection_endpoint":                base + "/protocol/openid-connect/token/introspect",
 		"response_types_supported":              []string{"code"},
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
@@ -317,58 +318,51 @@ func TestVerify_CacheMissCallsIntrospection(t *testing.T) {
 	}
 }
 
-func TestIntrospect_Active(t *testing.T) {
+// Introspection itself (active/inactive/HTTP error/invalid response,
+// caching, concurrency, TTL) is covered in depth by introspection_test.go
+// against the Introspector type directly, now that Verify delegates to it
+// instead of doing its own HTTP round trip.
+
+func TestVerify_OpaqueTokenSkipsLocalValidation(t *testing.T) {
 	mp := newMockProvider(t)
 	v := newTestVerifier(t, mp)
 
-	result, err := v.introspect(context.Background(), "any-token")
+	// No dots at all: cannot be a JWT, so Verify must not attempt local
+	// verification and instead rely solely on introspection (which this
+	// mock always reports active for any token value).
+	claims, err := v.Verify(context.Background(), "opaque-access-token-no-dots")
 	if err != nil {
-		t.Fatalf("introspect: %v", err)
+		t.Fatalf("Verify: %v", err)
 	}
-	if !result.Active {
-		t.Error("expected active=true")
-	}
+	_ = claims
 }
 
-func TestIntrospect_Inactive(t *testing.T) {
+func TestVerify_OpaqueTokenInactiveIsRejected(t *testing.T) {
 	mp := newMockProvider(t)
 	mp.setActive(false)
 	v := newTestVerifier(t, mp)
 
-	result, err := v.introspect(context.Background(), "any-token")
-	if err != nil {
-		t.Fatalf("introspect: %v", err)
-	}
-	if result.Active {
-		t.Error("expected active=false")
+	_, err := v.Verify(context.Background(), "opaque-access-token-no-dots")
+	if !errors.Is(err, ErrAccessTokenInactive) {
+		t.Errorf("expected ErrAccessTokenInactive, got %v", err)
 	}
 }
 
-func TestIntrospect_HTTPError(t *testing.T) {
+func TestVerify_OpaqueTokenWithIntrospectionDisabledFailsClosed(t *testing.T) {
 	mp := newMockProvider(t)
-	mp.setIntrospectStatus(http.StatusUnauthorized)
-	v := newTestVerifier(t, mp)
-
-	_, err := v.introspect(context.Background(), "any-token")
-	if !errors.Is(err, ErrIntrospectionFailed) {
-		t.Errorf("expected ErrIntrospectionFailed, got %v", err)
+	v, err := New(context.Background(), Config{
+		RealmURL:             mp.issuer(),
+		ClientID:             "test-client",
+		SkipExpiryCheck:      true,
+		DisableIntrospection: true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
-}
 
-func TestIntrospect_InvalidJSON(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("not-valid-json"))
-	}))
-	t.Cleanup(srv.Close)
-
-	v := &OIDC{
-		config:     Config{RealmURL: srv.URL, ClientID: "app", ClientSecret: "s"},
-		httpClient: &http.Client{},
-	}
-	_, err := v.introspect(context.Background(), "token")
-	if !errors.Is(err, ErrIntrospectionFailed) {
-		t.Errorf("expected ErrIntrospectionFailed, got %v", err)
+	_, err = v.Verify(context.Background(), "opaque-access-token-no-dots")
+	if !errors.Is(err, ErrTokenValidationFailed) {
+		t.Errorf("expected ErrTokenValidationFailed, got %v", err)
 	}
 }
 

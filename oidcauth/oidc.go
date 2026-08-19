@@ -2,12 +2,9 @@ package oidcauth
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -15,7 +12,10 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 )
 
-// Sentinel errors returned by the OIDC verifier.
+// Sentinel errors returned by the OIDC verifier. See also introspection.go
+// for the introspection-specific sentinels (ErrAccessTokenInactive,
+// ErrInvalidIntrospectionResponse, ErrInvalidOIDCConfiguration) and
+// ErrTokenRevoked's deprecation note.
 var (
 	ErrInvalidRealmURL       = errors.New("invalid OIDC configuration URL")
 	ErrEmptyClientID         = errors.New("client ID cannot be empty")
@@ -23,31 +23,31 @@ var (
 	ErrTokenValidationFailed = errors.New("token validation failed")
 	ErrProviderInitFailed    = errors.New("failed to initialize OIDC provider")
 	ErrIntrospectionFailed   = errors.New("token introspection failed")
-	ErrTokenRevoked          = errors.New("access token has been revoked")
 )
 
-const (
-	defaultRequestTimeout = 30 * time.Second
-	introspectEndpoint    = "/protocol/openid-connect/token/introspect"
-)
+const defaultRequestTimeout = 30 * time.Second
 
 // OIDC verifies tokens issued by an OpenID Connect provider and exposes
 // helpers for role- and scope-based authorization. A single OIDC value is
 // safe for concurrent use.
 type OIDC struct {
-	config     Config
-	provider   *oidc.Provider
-	verifier   *oidc.IDTokenVerifier
-	httpClient *http.Client
-	cache      Cache
+	config       Config
+	provider     *oidc.Provider
+	verifier     *oidc.IDTokenVerifier
+	httpClient   *http.Client
+	cache        Cache
+	introspector *Introspector
 }
 
 // Option configures an OIDC verifier.
 type Option func(*OIDC)
 
 // WithCache attaches a Cache to the verifier. Verify returns cached claims on
-// hit and stores validated claims on miss. Cache lifecycle (e.g. Close) is
-// managed by the caller.
+// hit and stores validated claims on miss. This caches the full Verify()
+// result (local JWT check plus introspection); it is independent of and
+// composes with the more granular, introspection-only cache Verify's
+// internal Introspector keeps when Config.IntrospectionCacheTTL is set.
+// Cache lifecycle (e.g. Close) is managed by the caller.
 func WithCache(c Cache) Option {
 	return func(o *OIDC) {
 		o.cache = c
@@ -57,6 +57,14 @@ func WithCache(c Cache) Option {
 // New builds an OIDC verifier and discovers the provider's metadata. The
 // supplied context bounds only the discovery call; use WithCache to control
 // caching behaviour.
+//
+// Unless Config.DisableIntrospection is set, New also builds an internal
+// Introspector for the RFC 7662 introspection Verify performs on every
+// access token: it resolves the introspection endpoint from the provider's
+// discovery document (falling back to Config.IntrospectionEndpoint see
+// resolveIntrospectionEndpoint) and applies Config.IntrospectionCacheTTL /
+// IntrospectionHTTPTimeout. Call Close when the OIDC verifier is no longer
+// needed to stop the Introspector's background cache-eviction goroutine.
 func New(ctx context.Context, config Config, opts ...Option) (*OIDC, error) {
 	if err := validateConfig(&config); err != nil {
 		return nil, err
@@ -85,6 +93,24 @@ func New(ctx context.Context, config Config, opts ...Option) (*OIDC, error) {
 		httpClient: httpClient,
 	}
 
+	if !config.DisableIntrospection {
+		endpoint, err := resolveIntrospectionEndpoint(provider, config)
+		if err != nil {
+			return nil, err
+		}
+		introspector, err := NewIntrospector(IntrospectorConfig{
+			Endpoint:     endpoint,
+			ClientID:     config.ClientID,
+			ClientSecret: config.ClientSecret,
+			HTTPTimeout:  config.IntrospectionHTTPTimeout,
+			CacheTTL:     config.IntrospectionCacheTTL,
+		})
+		if err != nil {
+			return nil, err
+		}
+		o.introspector = introspector
+	}
+
 	for _, opt := range opts {
 		opt(o)
 	}
@@ -92,18 +118,66 @@ func New(ctx context.Context, config Config, opts ...Option) (*OIDC, error) {
 	return o, nil
 }
 
-// Verify validates a bearer token and returns its claims.
+// Close stops the internal Introspector's background cache-eviction
+// goroutine, if introspection is enabled and Config.IntrospectionCacheTTL is
+// set. Idempotent; safe to call even when introspection is disabled or
+// caching was never enabled.
+func (o *OIDC) Close() {
+	if o.introspector != nil {
+		o.introspector.Close()
+	}
+}
+
+// Verify validates an access token and returns its claims.
 //
-// The flow is:
-//  1. cache lookup, return immediately on hit (if a Cache was attached);
-//  2. local JWT verification (signature, iss, aud, exp);
-//  3. remote introspection to catch revoked-but-not-yet-expired tokens,
-//     unless disabled via Config.DisableIntrospection;
+// # Access token vs. ID token
+//
+// Verify validates an access token, not an ID token an important
+// distinction Keycloak (and OIDC generally) does not erase just because
+// both may be JWTs signed by the same provider:
+//
+//   - A JWT-shaped access token (three dot-separated segments Keycloak's
+//     default) is checked locally using the same signature/issuer/expiry
+//     machinery go-oidc exposes for ID tokens, since structurally that
+//     machinery only verifies "this JWT was validly signed by this
+//     provider's keys and its iss/exp/aud claims check out" it makes no
+//     ID-token-specific assertion (no nonce, no at_hash). This local check
+//     is a real signature verification, not a rubber stamp.
+//   - An opaque access token (no JWT structure at all) cannot be checked
+//     locally by definition, so this step is skipped entirely for it rather
+//     than failing closed on a token that was never going to parse as a
+//     JWT in the first place.
+//
+// Either way, the local check (when applicable) and introspection answer
+// different questions: local verification proves the token's signature,
+// issuer, and audience are genuine and it has not expired *by its own
+// claims*; introspection proves the issuer still considers it active *right
+// now* (catching server-side revocation a stale local check cannot see).
+// Skipping the local check for an opaque token does not skip that second,
+// authoritative question introspection alone answers it.
+//
+// # Flow
+//
+//  1. cache lookup, return immediately on hit (if a Cache was attached via
+//     WithCache);
+//  2. local verification, only if the token looks JWT-shaped;
+//  3. remote introspection (RFC 7662, via the internal Introspector see
+//     its doc comment for its own caching/concurrency behavior), unless
+//     disabled via Config.DisableIntrospection;
 //  4. cache the claims (if a Cache was attached).
 //
-// Any failure in steps 2 or 3 returns ErrTokenValidationFailed; an inactive
-// token returns ErrTokenRevoked. The original error is wrapped so callers
-// using errors.Unwrap can still inspect it.
+// If introspection is disabled and the token is opaque, Verify cannot
+// establish anything about it and returns ErrTokenValidationFailed: with no
+// local structure to check and no remote authority consulted, there is
+// nothing left that could have verified it.
+//
+// A local-verification failure, or an introspection failure other than an
+// inactive token, returns ErrTokenValidationFailed wrapping the underlying
+// cause (inspect it with errors.Is/errors.As e.g.
+// errors.Is(err, ErrIntrospectionFailed) or
+// errors.Is(err, ErrInvalidIntrospectionResponse)). An inactive token
+// returns ErrAccessTokenInactive (also matched by the deprecated
+// ErrTokenRevoked) directly, not wrapped under ErrTokenValidationFailed.
 func (o *OIDC) Verify(ctx context.Context, token string) (Claims, error) {
 	now := time.Now()
 
@@ -115,23 +189,40 @@ func (o *OIDC) Verify(ctx context.Context, token string) (Claims, error) {
 		}
 	}
 
-	idToken, err := o.verifier.Verify(ctx, token)
-	if err != nil {
-		return Claims{}, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err)
-	}
-
 	var claims Claims
-	if err := idToken.Claims(&claims); err != nil {
-		return Claims{}, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err)
-	}
+	var knownExpiry time.Time
+	var haveLocalClaims bool
 
-	if !o.config.DisableIntrospection {
-		result, err := o.introspect(ctx, token)
+	if looksLikeJWT(token) {
+		idToken, err := o.verifier.Verify(ctx, token)
 		if err != nil {
 			return Claims{}, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err)
 		}
-		if !result.Active {
-			return Claims{}, ErrTokenRevoked
+		if err := idToken.Claims(&claims); err != nil {
+			return Claims{}, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err)
+		}
+		haveLocalClaims = true
+		knownExpiry = idToken.Expiry
+	}
+
+	if o.config.DisableIntrospection {
+		if !haveLocalClaims {
+			return Claims{}, fmt.Errorf(
+				"%w: token is opaque and introspection is disabled, so it cannot be verified",
+				ErrTokenValidationFailed,
+			)
+		}
+	} else {
+		introspected, err := o.introspector.Introspect(ctx, token, knownExpiry)
+		if err != nil {
+			if errors.Is(err, ErrAccessTokenInactive) {
+				return Claims{}, err
+			}
+			return Claims{}, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err)
+		}
+		if !haveLocalClaims {
+			// Opaque token: introspection is the only source of claims.
+			claims = introspected
 		}
 	}
 
@@ -172,42 +263,4 @@ func (o *OIDC) HasAllScopes(claims Claims, scopes ...string) bool {
 // matches the provided value.
 func (o *OIDC) IsAuthorizedParty(claims Claims, azp string) bool {
 	return claims.Azp == azp
-}
-
-// introspect calls the provider's RFC 7662 introspection endpoint and returns
-// the full Introspection result. Callers should check result.Active to
-// determine whether the token is still valid server-side.
-func (o *OIDC) introspect(ctx context.Context, token string) (Introspection, error) {
-	introspectURL, err := url.JoinPath(o.config.RealmURL, introspectEndpoint)
-	if err != nil {
-		return Introspection{}, fmt.Errorf("%w: building URL: %w", ErrIntrospectionFailed, err)
-	}
-
-	form := url.Values{}
-	form.Set("token", token)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, introspectURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return Introspection{}, fmt.Errorf("%w: building request: %w", ErrIntrospectionFailed, err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	req.SetBasicAuth(o.config.ClientID, o.config.ClientSecret)
-
-	resp, err := o.httpClient.Do(req)
-	if err != nil {
-		return Introspection{}, fmt.Errorf("%w: %w", ErrIntrospectionFailed, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return Introspection{}, fmt.Errorf("%w: unexpected status %d", ErrIntrospectionFailed, resp.StatusCode)
-	}
-
-	var out Introspection
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
-		return Introspection{}, fmt.Errorf("%w: decoding response: %w", ErrIntrospectionFailed, err)
-	}
-
-	return out, nil
 }
