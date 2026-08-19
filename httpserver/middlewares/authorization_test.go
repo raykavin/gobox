@@ -5,8 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strconv"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -18,7 +16,7 @@ func init() {
 }
 
 // fakeVerifier lets tests control what Authorization's call to Verify
-// returns, without touching a real OIDC provider.
+// returns, without touching a real OIDC provider or session store.
 type fakeVerifier struct {
 	wantToken string
 	claims    oidcauth.Claims
@@ -84,11 +82,11 @@ func TestAuthorization_ValidBearerHeader(t *testing.T) {
 	}
 }
 
-func TestAuthorization_ValidCookie(t *testing.T) {
-	verifier := &fakeVerifier{wantToken: "tok-cookie", claims: oidcauth.Claims{Sub: "user-2"}}
+func TestAuthorization_ValidSessionCookie(t *testing.T) {
+	verifier := &fakeVerifier{wantToken: "session-uuid", claims: oidcauth.Claims{Sub: "user-2"}}
 
 	rec, claims, ok := runAuthorization(t, verifier, func(r *http.Request) {
-		r.AddCookie(&http.Cookie{Name: AccessTokenCookie, Value: "tok-cookie"})
+		r.AddCookie(&http.Cookie{Name: SessionCookie, Value: "session-uuid"})
 	})
 
 	if rec.Code != http.StatusOK {
@@ -99,50 +97,11 @@ func TestAuthorization_ValidCookie(t *testing.T) {
 	}
 }
 
-func TestAuthorization_RejectsChunkedTokenReassembly(t *testing.T) {
-	full := "part-one-part-two-part-three"
-	chunks := []string{"part-one-", "part-two-", "part-three"}
-	verifier := &fakeVerifier{wantToken: full, claims: oidcauth.Claims{Sub: "user-4"}}
-
-	rec, claims, ok := runAuthorization(t, verifier, func(r *http.Request) {
-		r.AddCookie(&http.Cookie{Name: AccessTokenCookie + accessTokenChunksCountSuffix, Value: strconv.Itoa(len(chunks))})
-		for i, c := range chunks {
-			name := AccessTokenCookie + accessTokenChunkSeparator + strconv.Itoa(i)
-			r.AddCookie(&http.Cookie{Name: name, Value: url.PathEscape(c)})
-		}
-	})
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
-	}
-	if !ok || claims.Sub != "user-4" {
-		t.Fatalf("claims = %+v, ok = %v, want Sub=user-4, ok=true", claims, ok)
-	}
-}
-
-func TestAuthorization_MissingChunkFailsClosed(t *testing.T) {
-	verifier := &fakeVerifier{claims: oidcauth.Claims{Sub: "should-not-be-reached"}}
-
-	rec, _, ok := runAuthorization(t, verifier, func(r *http.Request) {
-		// Claims 3 chunks but only provides 2: reassembly must not proceed
-		// with a truncated value.
-		r.AddCookie(&http.Cookie{Name: AccessTokenCookie + accessTokenChunksCountSuffix, Value: "3"})
-		r.AddCookie(&http.Cookie{Name: AccessTokenCookie + accessTokenChunkSeparator + "0", Value: "a"})
-	})
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401 (body: %s)", rec.Code, rec.Body.String())
-	}
-	if ok {
-		t.Fatal("ClaimsFromContext ok = true, want false")
-	}
-}
-
 func TestAuthorization_BothHeaderAndCookieIsForbidden(t *testing.T) {
 	verifier := &fakeVerifier{claims: oidcauth.Claims{Sub: "should-not-be-reached"}}
 
 	rec, _, ok := runAuthorization(t, verifier, func(r *http.Request) {
-		r.AddCookie(&http.Cookie{Name: AccessTokenCookie, Value: "tok-cookie"})
+		r.AddCookie(&http.Cookie{Name: SessionCookie, Value: "session-uuid"})
 		r.Header.Set("Authorization", "Bearer tok-header")
 	})
 
@@ -194,7 +153,7 @@ func TestAuthorization_MalformedHeaderIsUnauthorized(t *testing.T) {
 }
 
 func TestAuthorization_VerifyFailureIsUnauthorized(t *testing.T) {
-	verifier := &fakeVerifier{wantToken: "tok-123", err: errors.New("token expired")}
+	verifier := &fakeVerifier{wantToken: "tok-123", err: errors.New("session expired")}
 
 	rec, _, ok := runAuthorization(t, verifier, func(r *http.Request) {
 		r.Header.Set("Authorization", "Bearer tok-123")

@@ -67,6 +67,7 @@ import "github.com/raykavin/gobox/retry"
 | Package | Description |
 |---|---|
 | [`oidcauth`](./oidcauth/README.md) | OIDC token verification with optional in-memory cache and Keycloak role helpers |
+| [`secure`](./secure/README.md) | Authenticated encryption (AES-256-GCM) for opaque byte payloads |
 
 ### Utilities
 
