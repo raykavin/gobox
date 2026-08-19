@@ -10,7 +10,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,14 +17,6 @@ import (
 	"github.com/raykavin/gobox/httpserver/respond"
 	"github.com/raykavin/gobox/oidcauth"
 	"golang.org/x/oauth2"
-)
-
-// Cookie names Auth writes but nothing else reads. AccessTokenCookie and
-// CSRFCookie are exported instead, since the authorization and CSRF
-// middlewares in this package read them on every request.
-const (
-	refreshTokenCookie = "refresh_token"
-	idTokenCookie      = "id_token"
 )
 
 // loginStateTTL bounds how long a login attempt has to complete the redirect
@@ -58,39 +49,42 @@ type MeResponse struct {
 // AuthCookieOptions carries the attributes applied to every cookie Auth writes.
 type AuthCookieOptions struct {
 	Domain   string
+	Path     string
 	Secure   bool
 	SameSite http.SameSite
-	// Path applies to every cookie Auth writes. One shared path, defaulting
-	// to "/", stays correct behind any reverse-proxy prefix in front of the
-	// API; narrower per-cookie paths would have to account for that prefix,
-	// which Auth cannot see.
-	Path string
 }
 
 // Auth handles the server-side OIDC Authorization Code + PKCE login flow: it
-// talks to the issuer on the browser's behalf and exposes the result only as
-// HttpOnly cookies, never in a response body. The PKCE verifier and return
-// path travel inside the signed state parameter, not a cookie (see loginState).
+// talks to the issuer on the browser's behalf, keeps the resulting OIDC
+// credentials exclusively server-side in a session (see
+// oidcauth.SessionManager), and exposes the browser only an opaque session
+// identifier as an HttpOnly cookie never an access, refresh, or ID token.
+// The PKCE verifier and return path travel inside the signed state
+// parameter, not a cookie (see loginState).
 type Auth struct {
 	flow                  *oidcauth.Flow
-	clientID              string
+	sessions              *oidcauth.SessionManager
+	verifier              oidcauth.ClaimsVerifier
 	cookies               AuthCookieOptions
+	clientID              string
 	postLoginRedirectURI  string
 	postLogoutRedirectURI string
 	stateSigningKey       []byte
-
-	// Fallback TTLs, used only when the token response carries no explicit
-	// lifetime for that token (defensive; Keycloak always sends one).
-	accessCookieDefaultTTL  time.Duration
-	refreshCookieDefaultTTL time.Duration
 }
 
 // NewAuth builds the handler. stateSigningKey authenticates the login state
 // parameter; passing the OIDC client secret works, since it is already
 // server-only secret material. Missing required arguments panic rather than
 // degrade, so a misconfigured handler never starts serving traffic.
+//
+// verifier extracts identity claims from the token Callback just exchanged,
+// once, at login time (an *oidcauth.OIDC satisfies this with no wrapper).
+// sessions owns every session's lifecycle afterwards: creation, expiry,
+// refresh, and deletion.
 func NewAuth(
 	flow *oidcauth.Flow,
+	verifier oidcauth.ClaimsVerifier,
+	sessions *oidcauth.SessionManager,
 	clientID string,
 	cookies AuthCookieOptions,
 	postLoginRedirectURI string,
@@ -99,6 +93,12 @@ func NewAuth(
 ) *Auth {
 	if flow == nil {
 		panic("oidc flow cannot be nil")
+	}
+	if verifier == nil {
+		panic("claims verifier cannot be nil")
+	}
+	if sessions == nil {
+		panic("session manager cannot be nil")
 	}
 	if clientID == "" {
 		panic("client id cannot be empty")
@@ -113,14 +113,14 @@ func NewAuth(
 		cookies.SameSite = http.SameSiteLaxMode
 	}
 	return &Auth{
-		flow:                    flow,
-		clientID:                clientID,
-		cookies:                 cookies,
-		postLoginRedirectURI:    postLoginRedirectURI,
-		postLogoutRedirectURI:   postLogoutRedirectURI,
-		stateSigningKey:         []byte(stateSigningKey),
-		accessCookieDefaultTTL:  5 * time.Minute,
-		refreshCookieDefaultTTL: 30 * 24 * time.Hour,
+		flow:                  flow,
+		verifier:              verifier,
+		sessions:              sessions,
+		clientID:              clientID,
+		cookies:               cookies,
+		postLoginRedirectURI:  postLoginRedirectURI,
+		postLogoutRedirectURI: postLogoutRedirectURI,
+		stateSigningKey:       []byte(stateSigningKey),
 	}
 }
 
@@ -140,8 +140,10 @@ func (h *Auth) Login(ctx *gin.Context) {
 }
 
 // Callback completes the login flow: it validates the signed state, exchanges
-// the code for tokens, writes the session cookies, and redirects the browser
-// to the path Login encoded into state.
+// the code for tokens, extracts the claims the application needs, creates the
+// server-side session, writes the session cookie, and redirects the browser
+// to the path Login encoded into state. The exchanged tokens never leave
+// this handler: only the opaque session ID reaches the browser.
 func (h *Auth) Callback(ctx *gin.Context) {
 	noStore(ctx)
 
@@ -180,58 +182,91 @@ func (h *Auth) Callback(ctx *gin.Context) {
 		return
 	}
 
-	h.applyToken(ctx, token)
+	claims, err := h.verifier.Verify(ctx.Request.Context(), token.AccessToken)
+	if err != nil {
+		respond.Unauthorized(ctx, respond.NewError(
+			"ERR_OIDC_CLAIMS",
+			"Failed to read identity claims",
+		))
+		return
+	}
+
+	session, err := h.sessions.Create(ctx.Request.Context(), token, claims)
+	if err != nil {
+		respond.InternalServerError(ctx, respond.NewError(
+			"ERR_SESSION_CREATE",
+			"Failed to create session",
+		))
+		return
+	}
+
+	h.applySession(ctx, session)
 	ctx.Redirect(http.StatusFound, h.resolveReturnTo(loginState.ReturnTo))
 }
 
-// Refresh trades the refresh_token cookie for a new token set and rewrites the
-// session cookies. A rejected refresh clears them, so the browser stops
-// retrying with credentials the issuer no longer honours.
+// Refresh re-resolves the caller's session transparently renewing its
+// access token if it has expired and the session itself has not and
+// rewrites the session cookie with the (possibly extended) expiry. A session
+// that cannot be resolved (expired, revoked, or refresh rejected by the
+// issuer) is cleared, so the browser stops sending credentials the issuer no
+// longer honours.
 func (h *Auth) Refresh(ctx *gin.Context) {
 	noStore(ctx)
-	refreshToken, err := ctx.Cookie(refreshTokenCookie)
-	if err != nil || refreshToken == "" {
+	sessionID, err := ctx.Cookie(SessionCookie)
+	if err != nil || sessionID == "" {
 		respond.Unauthorized(ctx, respond.NewError(
-			"ERR_MISSING_REFRESH_TOKEN",
-			"No refresh token cookie present",
+			"ERR_MISSING_SESSION",
+			"No session cookie present",
 		))
 		return
 	}
 
-	token, err := h.flow.Refresh(ctx.Request.Context(), refreshToken)
+	session, err := h.sessions.Resolve(ctx.Request.Context(), sessionID)
 	if err != nil {
-		h.clearAuthCookies(ctx)
+		h.clearSessionCookie(ctx)
 		respond.Unauthorized(ctx, respond.NewError(
-			"ERR_REFRESH_FAILED",
-			"Refresh token is invalid or expired",
+			"ERR_SESSION_INVALID",
+			"Session is invalid or expired",
 		))
 		return
 	}
 
-	h.applyToken(ctx, token)
+	h.applySession(ctx, session)
 	respond.NoContent(ctx)
 }
 
-// Logout clears every auth cookie and returns the issuer's RP-Initiated Logout
-// URL, so the frontend can navigate there and end the SSO session too. Falls
-// back to the post-logout URI when the issuer advertises no end-session
-// endpoint; the local cookies are cleared either way.
+// Logout deletes the caller's session, clears every auth cookie, and returns
+// the issuer's RP-Initiated Logout URL so the frontend can navigate there and
+// end the SSO session too. Safe and idempotent to call with no session, an
+// already expired session, or no cookie at all it always clears cookies and
+// always succeeds.
 func (h *Auth) Logout(ctx *gin.Context) {
 	noStore(ctx)
-	idToken, _ := ctx.Cookie(idTokenCookie)
+	sessionID, _ := ctx.Cookie(SessionCookie)
+
+	var idToken string
+	if sessionID != "" {
+		// Peek, not Resolve: logout must succeed even for a session that is
+		// already expired or otherwise unresolvable, and must never trigger
+		// a refresh just to read the ID token on the way out.
+		if s, err := h.sessions.Peek(ctx.Request.Context(), sessionID); err == nil {
+			idToken = s.Tokens.IDToken
+		}
+		_ = h.sessions.Delete(ctx.Request.Context(), sessionID)
+	}
 
 	logoutURL := h.flow.EndSessionURL(idToken, h.postLogoutRedirectURI)
 	if logoutURL == "" {
 		logoutURL = h.postLogoutRedirectURI
 	}
 
-	h.clearAuthCookies(ctx)
+	h.clearSessionCookie(ctx)
 
 	respond.OK(ctx, gin.H{"logout_url": logoutURL})
 }
 
 // Me returns the caller's identity and client roles, read from the claims the
-// authorization middleware already validated for this request.
+// authorization middleware already resolved for this request.
 func (h *Auth) Me(ctx *gin.Context) {
 	noStore(ctx)
 	claims, ok := ClaimsFromContext(ctx)
@@ -252,39 +287,22 @@ func (h *Auth) Me(ctx *gin.Context) {
 	})
 }
 
-// applyToken writes the session cookies from a freshly issued or refreshed
-// token set. A response that omits refresh_token (Keycloak always rotates it,
-// other issuers may not) leaves the existing refresh_token cookie in place
-// rather than clearing a session that is still valid.
-func (h *Auth) applyToken(ctx *gin.Context, token *oauth2.Token) {
-	accessTTL := time.Until(token.Expiry)
-	if accessTTL <= 0 {
-		accessTTL = h.accessCookieDefaultTTL
+// applySession writes the session cookie (session.ID, expiring with the
+// session) and a fresh CSRF double-submit cookie alongside it.
+func (h *Auth) applySession(ctx *gin.Context, session *oidcauth.Session) {
+	maxAge := time.Until(session.ExpiresAt)
+	if maxAge < 0 {
+		maxAge = 0
 	}
-	h.setChunkedCookie(ctx, AccessTokenCookie, token.AccessToken, accessTTL, true)
-
-	refreshTTL := h.refreshCookieDefaultTTL
-	if secs, ok := token.Extra("refresh_expires_in").(float64); ok && secs > 0 {
-		refreshTTL = time.Duration(secs) * time.Second
-	}
-	if token.RefreshToken != "" {
-		h.setCookie(ctx, refreshTokenCookie, token.RefreshToken, refreshTTL, true)
-	}
-
-	if idToken, ok := token.Extra("id_token").(string); ok && idToken != "" {
-		h.setCookie(ctx, idTokenCookie, idToken, refreshTTL, true)
-	}
+	h.setCookie(ctx, SessionCookie, session.ID, maxAge, true)
 
 	// Readable by JS on purpose: the frontend echoes it back in a header for
 	// the CSRF middleware to compare against this cookie.
-	h.setCookie(ctx, CSRFCookie, randomToken(24), refreshTTL, false)
+	h.setCookie(ctx, CSRFCookie, randomToken(24), maxAge, false)
 }
 
-// clearAuthCookies removes every cookie a signed-in session relies on.
-func (h *Auth) clearAuthCookies(ctx *gin.Context) {
-	h.clearChunkedCookie(ctx, AccessTokenCookie)
-	h.clearCookie(ctx, refreshTokenCookie)
-	h.clearCookie(ctx, idTokenCookie)
+func (h *Auth) clearSessionCookie(ctx *gin.Context) {
+	h.clearCookie(ctx, SessionCookie)
 	h.clearCookie(ctx, CSRFCookie)
 }
 
@@ -318,75 +336,6 @@ func (h *Auth) clearCookie(ctx *gin.Context, name string) {
 		Secure:   h.cookies.Secure,
 		SameSite: h.cookies.SameSite,
 	})
-}
-
-// setChunkedCookie writes value as a single cookie when it fits under
-// maxCookieValueBytes, or splits it across name+accessTokenChunkSeparator+i
-// chunk cookies plus a name+accessTokenChunksCountSuffix count when it
-// doesn't — the layout readAccessTokenCookie already knows how to
-// reassemble. Either way, it also clears whatever chunk cookies a previous,
-// larger value left behind that the current one no longer needs.
-func (h *Auth) setChunkedCookie(ctx *gin.Context, name, value string, maxAge time.Duration, httpOnly bool) {
-	previousChunks := previousChunkCount(ctx, name)
-
-	if len(value) <= maxCookieValueBytes {
-		h.setCookie(ctx, name, value, maxAge, httpOnly)
-		h.clearCookie(ctx, name+accessTokenChunksCountSuffix)
-		h.clearChunkRange(ctx, name, 0, previousChunks)
-		return
-	}
-
-	// The reassembled value only ever comes from concatenating chunks, so
-	// a stale plain cookie must not be left for readAccessTokenCookie's
-	// unchunked branch to pick up instead.
-	h.clearCookie(ctx, name)
-
-	chunks := chunkString(value, maxCookieValueBytes)
-	for i, chunk := range chunks {
-		h.setCookie(ctx, name+accessTokenChunkSeparator+strconv.Itoa(i), chunk, maxAge, httpOnly)
-	}
-	h.setCookie(ctx, name+accessTokenChunksCountSuffix, strconv.Itoa(len(chunks)), maxAge, httpOnly)
-	h.clearChunkRange(ctx, name, len(chunks), previousChunks)
-}
-
-// clearChunkedCookie removes name along with its chunk-count cookie and
-// every chunk cookie a previous value may have written.
-func (h *Auth) clearChunkedCookie(ctx *gin.Context, name string) {
-	h.clearCookie(ctx, name)
-	h.clearCookie(ctx, name+accessTokenChunksCountSuffix)
-	h.clearChunkRange(ctx, name, 0, previousChunkCount(ctx, name))
-}
-
-// clearChunkRange clears chunk cookies name+accessTokenChunkSeparator+i for
-// i in [from, to). Used to drop leftovers a previous, larger value wrote
-// that the current one no longer needs.
-func (h *Auth) clearChunkRange(ctx *gin.Context, name string, from, to int) {
-	for i := from; i < to; i++ {
-		h.clearCookie(ctx, name+accessTokenChunkSeparator+strconv.Itoa(i))
-	}
-}
-
-// previousChunkCount reads the chunk count a previous setChunkedCookie call
-// left in the request's cookies, or 0 if there is none (or it's malformed).
-func previousChunkCount(ctx *gin.Context, name string) int {
-	raw, err := ctx.Cookie(name + accessTokenChunksCountSuffix)
-	if err != nil || raw == "" {
-		return 0
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 0 {
-		return 0
-	}
-	return n
-}
-
-// chunkString splits value into slices of at most size bytes each.
-func chunkString(value string, size int) []string {
-	chunks := make([]string, 0, (len(value)+size-1)/size)
-	for start := 0; start < len(value); start += size {
-		chunks = append(chunks, value[start:min(start+size, len(value))])
-	}
-	return chunks
 }
 
 // randomToken returns nBytes of entropy, base64url-encoded. It panics on

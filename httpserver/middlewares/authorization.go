@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -16,19 +14,11 @@ import (
 const (
 	claimsKey = "oidc_claims"
 
-	// AccessTokenCookie is the cookie name handler.Auth writes on login/
-	// refresh and this middleware reads on every request. Exported so both
+	// SessionCookie is the cookie name handler.Auth writes on login/callback
+	// and this middleware reads on every request. Its value is an opaque
+	// session identifier (a UUID), never an OIDC token: exported so both
 	// sides share a single name instead of duplicating the literal.
-	AccessTokenCookie = "access_token"
-
-	accessTokenChunksCountSuffix = ".__chunks"
-	accessTokenChunkSeparator    = ".__chunk."
-
-	// maxCookieValueBytes keeps a single cookie's value comfortably under
-	// the ~4096-byte-per-cookie limit browsers enforce. Exceeding it doesn't
-	// error: the browser silently drops the whole Set-Cookie, which is why
-	// handler.Auth chunks anything larger instead of risking that.
-	maxCookieValueBytes = 3500
+	SessionCookie = "session_id"
 )
 
 var (
@@ -154,12 +144,16 @@ func ClaimsFromContext(ctx *gin.Context) (oidcauth.Claims, bool) {
 	return claims, ok
 }
 
-// extractToken resolves the bearer token, preferring the access_token
+// extractToken resolves the caller's token, preferring the session_id
 // cookie (browsers/WebSocket can't set Authorization) over the Bearer
 // header. Supplying both is rejected (ErrForbidden) to prevent token
-// confusion: one channel must not silently win over the other.
+// confusion: one channel must not silently win over the other. The
+// returned value is passed to TokenVerifier.Verify as-is; it does not
+// validate its shape (a session ID is a UUID, but a verifier backed by
+// something else may expect a different format), leaving that to the
+// verifier itself.
 func extractToken(ctx *gin.Context) (string, error) {
-	cookie, hasCookie := readAccessTokenCookie(ctx)
+	cookie, hasCookie := readSessionCookie(ctx)
 	bearer, bearerErr := extractBearerToken(ctx.GetHeader("Authorization"))
 	hasBearer := bearerErr == nil && bearer != ""
 
@@ -175,53 +169,13 @@ func extractToken(ctx *gin.Context) (string, error) {
 	}
 }
 
-// readAccessTokenCookie resolves access_token, reassembling the chunk
-// cookies (access_token.__chunks + .__chunk.0, .1, ...) if a value ever
-// needs to be split to stay under the ~4KB per-cookie limit. handler.Auth
-// currently always writes a single, unchunked cookie; this reassembly path
-// exists for a future token large enough to require it.
-func readAccessTokenCookie(ctx *gin.Context) (string, bool) {
-	if value, err := ctx.Cookie(AccessTokenCookie); err == nil && value != "" {
-		return decodeCookieValue(value), true
-	}
-
-	rawCount, err := ctx.Cookie(AccessTokenCookie + accessTokenChunksCountSuffix)
-	if err != nil || rawCount == "" {
+// readSessionCookie resolves the session_id cookie.
+func readSessionCookie(ctx *gin.Context) (string, bool) {
+	value, err := ctx.Cookie(SessionCookie)
+	if err != nil || value == "" {
 		return "", false
 	}
-
-	chunkCount, err := strconv.Atoi(rawCount)
-	if err != nil || chunkCount <= 0 {
-		return "", false
-	}
-
-	var sb strings.Builder
-	for i := range chunkCount {
-		chunkName := fmt.Sprintf("%s%s%d",
-			AccessTokenCookie,
-			accessTokenChunkSeparator,
-			i,
-		)
-		chunk, err := ctx.Cookie(chunkName)
-		if err != nil {
-			// Missing chunk: treat as absent rather than validate a truncated token.
-			return "", false
-		}
-		_, _ = sb.WriteString(chunk)
-	}
-
-	return decodeCookieValue(sb.String()), true
-}
-
-// decodeCookieValue undoes any percent-encoding a cookie value may carry.
-// A no-op for the plain base64url JWTs handler.Auth writes today, but kept
-// for compatibility with any percent-encoded value a client might send.
-func decodeCookieValue(value string) string {
-	decoded, err := url.PathUnescape(value)
-	if err != nil {
-		return value
-	}
-	return decoded
+	return value, true
 }
 
 func extractBearerToken(authHeader string) (string, error) {
