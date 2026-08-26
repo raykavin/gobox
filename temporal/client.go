@@ -24,8 +24,8 @@ const (
 	defaultStartToClose       = 1 * time.Hour
 )
 
-// NewClient dials a Temporal server and returns a connected client. Host and
-// namespace are required.
+// NewClient dials a Temporal server and returns a connected client.
+// Host and namespace are required.
 func NewClient(namespace, host string, port uint16) (client.Client, error) {
 	if host == "" {
 		return nil, ErrEmptyHost
