@@ -44,20 +44,20 @@ func (e Err) apiError() APIError {
 	}
 }
 
-// ErrorRegister maps sentinel errors to API errors. Registration is expected to
+// ErrorResolver maps sentinel errors to API errors. Registration is expected to
 // happen once during startup; lookups are safe for concurrent use afterwards.
 //
 // Match priority follows registration order: register specific errors before
 // the generic ones they wrap.
-type ErrorRegister struct {
+type ErrorResolver struct {
 	mu       sync.RWMutex
 	entries  []Err
 	fallback Err
 }
 
-// NewErrRegister returns a register with a generic 500 fallback.
-func NewErrRegister() *ErrorRegister {
-	return &ErrorRegister{
+// NewErrorResolver returns a register with a generic 500 fallback.
+func NewErrorResolver() *ErrorResolver {
+	return &ErrorResolver{
 		entries: make([]Err, 0, 32),
 		fallback: Err{
 			Err:     errors.New("respond: unregistered error"),
@@ -69,7 +69,7 @@ func NewErrRegister() *ErrorRegister {
 }
 
 // SetFallback replaces the response used when no sentinel matches.
-func (r *ErrorRegister) SetFallback(e Err) error {
+func (r *ErrorResolver) SetFallback(e Err) error {
 	if err := e.validate(); err != nil {
 		return fmt.Errorf("respond err register: fallback: %w", err)
 	}
@@ -84,9 +84,9 @@ func (r *ErrorRegister) SetFallback(e Err) error {
 	return nil
 }
 
-// Register adds one or more mappings. It fails on invalid entries and on
+// AddEntries adds one or more mappings. It fails on invalid entries and on
 // sentinels that are already mapped, so startup misconfiguration is loud.
-func (r *ErrorRegister) Register(entries ...Err) error {
+func (r *ErrorResolver) AddEntries(entries ...Err) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -109,16 +109,16 @@ func (r *ErrorRegister) Register(entries ...Err) error {
 	return nil
 }
 
-// MustRegister is Register for use in init/bootstrap code, where a bad mapping
+// MustAddEntries uses in init/bootstrap code, where a bad mapping
 // is a programming error and should stop the process.
-func (r *ErrorRegister) MustRegister(entries ...Err) {
-	if err := r.Register(entries...); err != nil {
+func (r *ErrorResolver) MustAddEntries(entries ...Err) {
+	if err := r.AddEntries(entries...); err != nil {
 		panic(err)
 	}
 }
 
 // Lookup returns the first entry whose sentinel matches err.
-func (r *ErrorRegister) Lookup(err error) (Err, bool) {
+func (r *ErrorResolver) Lookup(err error) (Err, bool) {
 	if err == nil {
 		return Err{}, false
 	}
@@ -138,7 +138,7 @@ func (r *ErrorRegister) Lookup(err error) (Err, bool) {
 // Resolve always returns a renderable response: the registered mapping when
 // there is one, the fallback otherwise. The bool reports whether err was known,
 // which is useful to decide between logging at error or debug level.
-func (r *ErrorRegister) Resolve(err error) (APIError, int, bool) {
+func (r *ErrorResolver) Resolve(err error) (APIError, int, bool) {
 	if e, ok := r.Lookup(err); ok {
 		return e.apiError(), e.Status, true
 	}
@@ -152,7 +152,7 @@ func (r *ErrorRegister) Resolve(err error) (APIError, int, bool) {
 
 // ResolveWithDetails is Resolve with per-request details overriding the static
 // ones (validation fields, offending IDs, etc.).
-func (r *ErrorRegister) ResolveWithDetails(err error, details any) (APIError, int, bool) {
+func (r *ErrorResolver) ResolveWithDetails(err error, details any) (APIError, int, bool) {
 	apiErr, status, ok := r.Resolve(err)
 	if details != nil {
 		apiErr.Details = details
@@ -162,7 +162,7 @@ func (r *ErrorRegister) ResolveWithDetails(err error, details any) (APIError, in
 }
 
 // Len returns the number of registered mappings.
-func (r *ErrorRegister) Len() int {
+func (r *ErrorResolver) Len() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -172,7 +172,7 @@ func (r *ErrorRegister) Len() int {
 // aliasLocked reports an entry that is mutually equivalent to err, i.e. an
 // actual re-registration rather than a specialization of an already mapped
 // error. Caller must hold the lock.
-func (r *ErrorRegister) aliasLocked(err error) (Err, bool) {
+func (r *ErrorResolver) aliasLocked(err error) (Err, bool) {
 	for _, e := range r.entries {
 		if errors.Is(err, e.Err) && errors.Is(e.Err, err) {
 			return e, true
