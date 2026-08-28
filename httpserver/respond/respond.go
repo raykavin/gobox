@@ -8,10 +8,10 @@ import (
 
 // Response is the standard API response envelope returned by all handlers.
 type Response struct {
-	Success bool        `json:"success"`
-	Message string      `json:"message,omitempty"`
-	Data    any         `json:"data,omitempty"`
-	Errors  []*APIError `json:"errors,omitempty"`
+	Success bool       `json:"success"`
+	Message string     `json:"message,omitempty"`
+	Data    any        `json:"data,omitempty"`
+	Errors  []APIError `json:"errors,omitempty"`
 } // @name respond.Response
 
 // APIError contains detailed information about a single error.
@@ -58,60 +58,60 @@ func NoContent(ctx *gin.Context) {
 }
 
 // BadRequest sends a 400 Bad Request respond.
-func BadRequest(ctx *gin.Context, errs ...*APIError) {
+func BadRequest(ctx *gin.Context, errs ...APIError) {
 	ctx.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(errs, msgBadRequest))
 }
 
 // Unauthorized sends a 401 Unauthorized respond.
-func Unauthorized(ctx *gin.Context, errs ...*APIError) {
+func Unauthorized(ctx *gin.Context, errs ...APIError) {
 	ctx.AbortWithStatusJSON(http.StatusUnauthorized, errorResponse(errs, msgUnauthorized))
 }
 
 // Forbidden sends a 403 Forbidden respond.
-func Forbidden(ctx *gin.Context, errs ...*APIError) {
+func Forbidden(ctx *gin.Context, errs ...APIError) {
 	ctx.AbortWithStatusJSON(http.StatusForbidden, errorResponse(errs, msgForbidden))
 }
 
 // NotFound sends a 404 Not Found respond.
-func NotFound(ctx *gin.Context, errs ...*APIError) {
+func NotFound(ctx *gin.Context, errs ...APIError) {
 	ctx.AbortWithStatusJSON(http.StatusNotFound, errorResponse(errs, msgNotFound))
 }
 
 // Conflict sends a 409 Conflict respond.
-func Conflict(ctx *gin.Context, errs ...*APIError) {
+func Conflict(ctx *gin.Context, errs ...APIError) {
 	ctx.AbortWithStatusJSON(http.StatusConflict, errorResponse(errs, msgConflict))
 }
 
 // UnprocessableEntity sends a 422 Unprocessable Entity respond.
 // Useful for validation errors after the request has been parsed successfully.
-func UnprocessableEntity(ctx *gin.Context, errs ...*APIError) {
+func UnprocessableEntity(ctx *gin.Context, errs ...APIError) {
 	ctx.AbortWithStatusJSON(http.StatusUnprocessableEntity, errorResponse(errs, msgUnprocessable))
 }
 
 // TooManyRequests sends a 429 Too Many Requests respond.
-func TooManyRequests(ctx *gin.Context, errs ...*APIError) {
+func TooManyRequests(ctx *gin.Context, errs ...APIError) {
 	ctx.AbortWithStatusJSON(http.StatusTooManyRequests, errorResponse(errs, msgTooManyRequest))
 }
 
 // InternalServerError sends a 500 Internal Server Error respond.
-func InternalServerError(ctx *gin.Context, errs ...*APIError) {
+func InternalServerError(ctx *gin.Context, errs ...APIError) {
 	ctx.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(errs, msgInternalError))
 }
 
 // ServiceUnavailable sends a 503 Server Unavailable Error respond.
-func ServiceUnavailable(ctx *gin.Context, errs ...*APIError) {
+func ServiceUnavailable(ctx *gin.Context, errs ...APIError) {
 	ctx.AbortWithStatusJSON(http.StatusServiceUnavailable, errorResponse(errs, msgServiceUnavailable))
 }
 
 // Error sends a custom error response with the given HTTP status code.
 // Use this when none of the specific helpers above fit.
-func Error(ctx *gin.Context, status int, errs ...*APIError) {
+func Error(ctx *gin.Context, status int, errs ...APIError) {
 	ctx.AbortWithStatusJSON(status, errorResponse(errs, msgInternalError))
 }
 
 // NewError is a convenience constructor for building an APIError.
-func NewError(code, message string, details ...any) *APIError {
-	e := &APIError{Code: code, Message: message}
+func NewError(code, message string, details ...any) APIError {
+	e := APIError{Code: code, Message: message}
 	if len(details) > 0 {
 		e.Details = details[0]
 	}
@@ -133,7 +133,7 @@ func successResponse(data any, message string) *Response {
 	}
 }
 
-func errorResponse(errs []*APIError, message string) *Response {
+func errorResponse(errs []APIError, message string) *Response {
 	return &Response{
 		Success: false,
 		Message: message,

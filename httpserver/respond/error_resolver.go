@@ -92,11 +92,11 @@ func (r *ErrorResolver) AddEntries(entries ...Err) error {
 
 	for i, e := range entries {
 		if err := e.validate(); err != nil {
-			return fmt.Errorf("respond err register: entry %d: %w", i, err)
+			return fmt.Errorf("add error respond: entry %d: %w", i, err)
 		}
 		if dup, ok := r.aliasLocked(e.Err); ok {
 			return fmt.Errorf(
-				"respond err register: entry %d (%s): sentinel already mapped to %q",
+				"add error respond: entry %d (%s): sentinel already mapped to %q",
 				i, e.Code, dup.Code,
 			)
 		}
