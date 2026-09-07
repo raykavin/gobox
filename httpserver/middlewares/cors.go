@@ -7,10 +7,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const defaultAllowCredentials = "true"
-
 var (
-	defaultAllowedHeaders = []string{
+	// DefaultAllowedHeaders is the header set CORS advertises when an option
+	// set leaves AllowedHeaders empty.
+	DefaultAllowedHeaders = []string{
 		"Content-Type",
 		"Content-Length",
 		"Accept-Encoding",
@@ -22,7 +22,9 @@ var (
 		"X-Requested-With",
 	}
 
-	defaultAllowedMethods = []string{
+	// DefaultAllowedMethods is the method set CORS advertises when an option
+	// set leaves AllowedMethods empty.
+	DefaultAllowedMethods = []string{
 		http.MethodGet,
 		http.MethodPost,
 		http.MethodPut,
@@ -32,59 +34,130 @@ var (
 	}
 )
 
-// toHeaderCase converts lowercase strings to proper HTTP header case format
-func toHeaderCase(s string) string {
-	// Split by hyphen and capitalize each part
-	parts := strings.Split(s, "-")
-	for i, part := range parts {
-		if part == "" {
-			continue
-		}
-		// Capitalize only the first letter, keep the rest as is
-		parts[i] = strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
-	}
-	return strings.Join(parts, "-")
+// CORSOptions describes the cross-origin policy the middleware advertises.
+//
+// Only AllowedOrigins is mandatory. AllowedMethods and AllowedHeaders fall
+// back to the Default* sets above when empty, so a caller that only cares
+// about origins keeps the previous behaviour without spelling the rest out.
+type CORSOptions struct {
+	// AllowedOrigins is matched against the request's Origin header by exact
+	// string comparison: include the scheme, include a non-default port, and
+	// never a trailing slash. "*" is not a wildcard here; list real origins.
+	AllowedOrigins []string
+
+	// AllowedMethods and AllowedHeaders are advertised verbatim. Empty means
+	// DefaultAllowedMethods / DefaultAllowedHeaders.
+	AllowedMethods []string
+	AllowedHeaders []string
+
+	// AllowCredentials decides whether Access-Control-Allow-Credentials is
+	// sent at all. When false the header is omitted rather than set to
+	// "false", which is what the fetch specification reads as "not allowed".
+	AllowCredentials bool
 }
 
-// CORS returns a Gin middleware that sets CORS headers, restricted to the
-// origins in allowedOrigins. An Origin outside that list gets no CORS
-// headers at all, so the browser blocks the response client credentials
-// (cookies) travel with every request now, so Access-Control-Allow-Origin
-// can no longer reflect-any-origin the way it could when only a
-// self-attached Authorization header was at stake.
+// CORS returns a middleware restricted to allowedOrigins, advertising the
+// default method and header sets with credentials enabled.
 //
-// If customCors is provided, it takes over entirely and allowedOrigins is
-// ignored (kept for callers with a fully custom header set already wired
-// up e.g. non-production/test configurations).
-func CORS(allowedOrigins []string, customCors ...map[string]string) gin.HandlerFunc {
-	allowed := make(map[string]bool, len(allowedOrigins))
-	for _, o := range allowedOrigins {
-		allowed[o] = true
+// It is the backwards-compatible shorthand for CORSWithOptions. The previous
+// signature also took a customCors map that replaced every header
+// unconditionally; that variant is gone, because writing a static header set
+// bypassed the per-origin check and handed CORS headers to any caller. Build a
+// CORSOptions instead.
+func CORS(allowedOrigins []string) gin.HandlerFunc {
+	return CORSWithOptions(CORSOptions{
+		AllowedOrigins:   allowedOrigins,
+		AllowCredentials: true,
+	})
+}
+
+// CORSWithOptions returns a middleware applying opts.
+//
+// An Origin outside the list gets no CORS headers at all, which is what makes
+// the browser block the response. Credentials (a session cookie) travel with
+// every request when AllowCredentials is set, so Access-Control-Allow-Origin
+// can never reflect an arbitrary origin the way it could when only a
+// self-attached Authorization header was at stake.
+func CORSWithOptions(opts CORSOptions) gin.HandlerFunc {
+	policy := NewCORSPolicy(opts)
+	return CORSWithProvider(func() *CORSPolicy { return policy })
+}
+
+// CORSPolicy is CORSOptions with the per-request work already done: the origin
+// set as a map and the advertised lists already joined.
+//
+// It exists so a policy can be swapped at runtime without paying for that work
+// on every request: build a new one, publish the pointer, and CORSWithProvider
+// picks it up on the next request.
+type CORSPolicy struct {
+	allowed     map[string]bool
+	methods     string
+	headers     string
+	credentials bool
+}
+
+// NewCORSPolicy precomputes opts into an immutable policy.
+func NewCORSPolicy(opts CORSOptions) *CORSPolicy {
+	allowed := make(map[string]bool, len(opts.AllowedOrigins))
+	for _, origin := range opts.AllowedOrigins {
+		allowed[origin] = true
 	}
 
-	return func(c *gin.Context) {
-		// Apply custom headers if provided
-		if len(customCors) > 0 {
-			for key, value := range customCors[0] {
-				c.Writer.Header().Set(toHeaderCase(key), value)
+	return &CORSPolicy{
+		allowed:     allowed,
+		methods:     joinHeaderValues(opts.AllowedMethods, DefaultAllowedMethods),
+		headers:     joinHeaderValues(opts.AllowedHeaders, DefaultAllowedHeaders),
+		credentials: opts.AllowCredentials,
+	}
+}
+
+// CORSWithProvider is CORSWithOptions against a policy that may change.
+//
+// provider is called once per request and must be cheap: the intended source
+// is an atomic pointer load. A nil policy disables CORS headers rather than
+// panicking, so a half-configured reload cannot take the server down.
+func CORSWithProvider(provider func() *CORSPolicy) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		policy := provider()
+		origin := ctx.Request.Header.Get("Origin")
+
+		if policy != nil && origin != "" && policy.allowed[origin] {
+			header := ctx.Writer.Header()
+
+			header.Set("Vary", "Origin")
+			header.Set("Access-Control-Allow-Origin", origin)
+
+			if policy.methods != "" {
+				header.Set("Access-Control-Allow-Methods", policy.methods)
 			}
-		} else {
-			origin := c.Request.Header.Get("Origin")
-			if origin != "" && allowed[origin] {
-				c.Writer.Header().Set("Vary", "Origin")
-				c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
-				c.Writer.Header().Set("Access-Control-Allow-Credentials", defaultAllowCredentials)
-				c.Writer.Header().Set("Access-Control-Allow-Headers", strings.Join(defaultAllowedHeaders, ", "))
-				c.Writer.Header().Set("Access-Control-Allow-Methods", strings.Join(defaultAllowedMethods, ", "))
+			if policy.headers != "" {
+				header.Set("Access-Control-Allow-Headers", policy.headers)
+			}
+			if policy.credentials {
+				header.Set("Access-Control-Allow-Credentials", "true")
 			}
 		}
 
-		// Handle preflight request
-		if c.Request.Method == http.MethodOptions {
-			c.AbortWithStatus(http.StatusNoContent)
+		if ctx.Request.Method == http.MethodOptions {
+			ctx.AbortWithStatus(http.StatusNoContent)
 			return
 		}
 
-		c.Next()
+		ctx.Next()
 	}
+}
+
+// joinHeaderValues renders values as a comma-separated header value, dropping
+// blank entries and falling back to fallback when nothing usable is left.
+func joinHeaderValues(values, fallback []string) string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		out = fallback
+	}
+	return strings.Join(out, ", ")
 }
