@@ -30,7 +30,7 @@ import (
     stdsql "database/sql"
     "log"
 
-    kitql "github.com/raykavin/gobox/database/sql"
+    sqldb "github.com/raykavin/gobox/database/sql"
     _ "github.com/lib/pq"
 )
 
@@ -40,7 +40,7 @@ type User struct {
 }
 
 func main() {
-    conn, err := kitql.NewSQL(kitql.SQLConfig{
+    conn, err := sqldb.NewSQL(sqldb.SQLConfig{
         Driver: "postgres",
         DSN:    "postgres://user:pass@localhost/mydb?sslmode=disable",
     }, func(rows *stdsql.Rows) (User, error) {
@@ -71,3 +71,5 @@ func main() {
 - `ScanFunc` must call `rows.Scan` internally and must not advance the cursor; `Query` handles the `rows.Next` loop
 - `Query` returns `nil, nil` (not an error) when the result set is empty
 - `Close` releases the underlying connection pool; it should be called when the `Connector` is no longer needed
+- `NewSQL` rejects an empty `Driver`, an empty `DSN`, and a nil `ScanFunc` before opening anything, and closes the connection itself if the ping fails
+- the alias in the example avoids a collision with the standard library's `database/sql`, since both packages are named `sql`

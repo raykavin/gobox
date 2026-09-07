@@ -58,7 +58,7 @@ func main() {
 - `NewAESGCMEncryptor` requires a key of exactly `secure.KeySize` (32) bytes and returns `ErrInvalidKeySize` otherwise
 - `Encrypt` prepends the nonce to the returned ciphertext; `Decrypt` expects that same layout and returns `ErrCiphertextTooShort` if the input is too short to contain a nonce
 - `Decrypt` returns an error if authentication fails, which covers both a tampered ciphertext and the wrong key
-- the encryption key is supplied by the caller and is never derived, stored, or logged by this package key generation, rotation, and storage are the caller's responsibility
+- the encryption key is supplied by the caller and is never derived, stored, or logged by this package: key generation, rotation, and storage are the caller's responsibility
 - never construct ciphertext by hand or reuse a nonce with the same key: nonce reuse under AES-GCM breaks both confidentiality and authenticity of every message that shares it
 
 ## Reference

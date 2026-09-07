@@ -70,14 +70,43 @@ migrations/
 
 ## Errors
 
+All sentinels can be matched with `errors.Is`. Validation failures are wrapped as `ErrInvalidConfig` joined with the specific cause, so both match.
+
+### Configuration
+
 | Sentinel | Cause |
 |---|---|
-| `ErrInvalidConfig` | required field missing or dialector not supported |
+| `ErrInvalidConfig` | wraps every validation failure below |
+| `ErrDSNRequired` | `DSN` is empty |
+| `ErrDialectorRequired` | `Dialector` is empty |
+| `ErrUnsupportedDialect` | `Dialector` is not `postgres`, `mysql`, or `sqlite3` |
+| `ErrMigrationsPathRequired` | `MigrationsPath` is empty |
+| `ErrInvalidMigrationsPath` | `MigrationsPath` does not exist on disk |
+
+### Setup
+
+| Sentinel | Cause |
+|---|---|
 | `ErrDatabaseConnectionFailed` | `sql.Open` failed |
 | `ErrDatabasePingFailed` | database unreachable after open |
-| `ErrDatabaseDirtyState` | previous migration left the database in a dirty state |
+| `ErrAbsolutePathFailed` | `MigrationsPath` could not be resolved to an absolute path |
+| `ErrMigrateInstanceFailed` | the underlying golang-migrate instance could not be created |
+
+### Migration
+
+| Sentinel | Cause |
+|---|---|
+| `ErrGetVersionFailed` | the current migration version could not be read |
+| `ErrDatabaseDirtyState` | a previous migration left the database in a dirty state |
 | `ErrMigrationFailed` | `migrate.Up()` returned an unexpected error |
+| `ErrGetNewVersionFailed` | the version could not be re-read after applying |
+
+### Population
+
+| Sentinel | Cause |
+|---|---|
 | `ErrReadPopulationDirectory` | `PopulationPath` could not be read |
+| `ErrReadPopulateFile` | a seed file could not be read |
 | `ErrPopulateExecutionFailed` | a seed file failed to execute |
 
 ## Notes
@@ -86,3 +115,5 @@ migrations/
 - `Populate` is a no-op when `PopulationPath` is empty
 - seed files are executed in the order returned by `os.ReadDir`, which is alphabetical
 - if the database is in a dirty state, manual intervention is required before migrations can proceed
+- `MigrationsPath` must exist when `New` is called; `PopulationPath` is only read when `Populate` runs
+- the drivers for all three supported dialects are linked in by this package, so callers do not need their own blank imports

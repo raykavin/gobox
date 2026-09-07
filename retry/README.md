@@ -72,4 +72,29 @@ func main() {
 - the backoff progression is `waitMin`, `waitMin*2`, `waitMin*4`, and so on, capped at `waitMax`
 - if `ctx` is cancelled while waiting between attempts, `Do()` returns `ctx.Err()`
 - when the final attempt fails or retries stop early, `Do()` returns the last error returned by `fn`
+- `shouldRetry` is not consulted after the final attempt, since there is nothing left to decide; with `maxAttempts` of 1 it is never called at all
+- `ctx` is only checked while waiting between attempts, so the first call to `fn` runs even if `ctx` is already cancelled
 - `Do()` does not validate its inputs, so callers should pass `maxAttempts >= 1`, `waitMin <= waitMax`, and non-nil `shouldRetry` and `fn`
+
+## Reference
+
+```go
+func Do(
+    ctx context.Context,
+    maxAttempts int,
+    waitMin, waitMax time.Duration,
+    shouldRetry func(attempt int, err error) bool,
+    fn func() error,
+) error
+```
+
+| Parameter     | Description                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------ |
+| `ctx`         | Cancels the wait between attempts; `Do` returns `ctx.Err()` if it fires                   |
+| `maxAttempts` | Total number of calls to `fn`, including the first                                        |
+| `waitMin`     | Delay before the second attempt, and the base of the exponential progression              |
+| `waitMax`     | Upper bound on any single delay                                                           |
+| `shouldRetry` | Called with the 1-based failed attempt and its error; returning `false` stops immediately |
+| `fn`          | The operation to run                                                                      |
+
+`Do` returns `nil` on the first success, `ctx.Err()` if the context is cancelled during a wait, and otherwise the error from the last call to `fn`.

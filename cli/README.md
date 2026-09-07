@@ -26,6 +26,7 @@ package main
 
 import (
     "log"
+
     "github.com/raykavin/gobox/cli"
 )
 
@@ -45,8 +46,8 @@ func main() {
 package main
 
 import (
-    "fmt"
     "sync"
+
     "github.com/raykavin/gobox/cli"
 )
 
@@ -70,7 +71,7 @@ func main() {
                 p.Fail(idx, err.Error())
                 return
             }
-            p.Done(idx, fmt.Sprintf("done"))
+            p.Done(idx, "done")
         }(item)
     }
     wg.Wait()
@@ -83,4 +84,41 @@ func main() {
 - `PrintHeader` silently skips fields it cannot retrieve (distribution, hostname, kernel version) rather than returning an error
 - the `numSlots` argument to `New` also caps concurrent workers since `Acquire` blocks when all slots are taken
 - the render loop runs at 100 ms intervals; call `Stop` to flush a final frame and release the goroutine
-- `Start` and `Stop` are safe to call multiple times; only the first call to each has effect
+- `Start` and `Stop` are safe to call from multiple goroutines and to call more than once
+- calling `Stop` before `Start` consumes the internal `sync.Once`, so a later `Start` will not launch the render loop; always `Start` first
+
+## Reference
+
+### Functions
+
+| Function                          | Description                                                                                  |
+| --------------------------------- | -------------------------------------------------------------------------------------------- |
+| `PrintBanner(appName string) error` | Renders `appName` as cyan ASCII art in a randomly chosen font, followed by a separator       |
+| `PrintHeader(content string)`       | Prints a separator, then `content` and the detected system information                       |
+| `PrintText(text string)`            | Prints a single bold cyan line                                                               |
+
+### Progress
+
+| Method                        | Description                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------------ |
+| `New(numSlots int) *Progress` | Creates a display with `numSlots` visible lines                                     |
+| `Acquire(desc string) int`    | Blocks until a slot is free, then claims it and returns its index                   |
+| `Release(idx int)`            | Returns the slot to the pool so a waiting `Acquire` can proceed                     |
+| `Update(idx int, msg string)` | Replaces the message on a slot, keeping the spinner running                         |
+| `Done(idx int, msg string)`   | Marks the slot as succeeded                                                         |
+| `Fail(idx int, msg string)`   | Marks the slot as failed                                                            |
+| `Start()`                     | Begins the 100 ms background render loop                                            |
+| `Stop()`                      | Halts the render loop, waits for it to exit, then performs a final render           |
+
+### Errors
+
+| Error                     | Returned when                                                             |
+| ------------------------- | --------------------------------------------------------------------------- |
+| `ErrEmptyFontsList`       | `PrintBanner` finds the built-in font list empty                           |
+| `ErrOSReleaseNotFound`    | `/etc/os-release` is missing while reading the distribution name           |
+| `ErrReadOSReleaseFailed`  | `/etc/os-release` exists but cannot be read                                |
+| `ErrDistributionNotFound` | `/etc/os-release` contains no distribution name                            |
+| `ErrHostnameFailed`       | The hostname cannot be determined                                          |
+| `ErrKernelVersionFailed`  | The kernel version cannot be determined                                    |
+
+These errors are surfaced by `PrintBanner` and by the internal system-information lookups. `PrintHeader` itself returns nothing and omits any field whose lookup failed.

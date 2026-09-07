@@ -12,9 +12,11 @@ import "github.com/raykavin/gobox/httpserver"
 
 - `NewGin()` for creating a configured Gin engine
 - `DefaultGinConfig()` for a sensible starting configuration
-- `Engine.SetupRoutes()` and `Engine.SetupMiddleware()` for attaching routes and middleware
+- `Engine.SetupRoutes()`, `Engine.SetupMiddleware()`, and `Engine.Use()` for attaching routes and middleware
 - `Engine.Listen()` for starting the server (HTTP or HTTPS)
 - `Engine.Shutdown()` for graceful shutdown with a context deadline
+- `Engine.Router()` and `Engine.Server()` for reaching the underlying `*gin.Engine` and `*http.Server`
+- `DownloadFile()` for writing a byte slice to a response as a downloadable attachment
 - TLS 1.2+ with curated cipher suites when `UseSSL` is true
 - HTTP/2 support when both `UseSSL` and `EnableHTTP2` are true
 - automatic `gin.Recovery()` middleware when `UseRecovery` is true
@@ -81,6 +83,32 @@ func main() {
 }
 ```
 
+## Engine methods
+
+| Method | Description |
+|---|---|
+| `SetupRoutes(RouteSetup)` | Runs the callback against the underlying `*gin.Engine` to register routes |
+| `SetupMiddleware(MiddlewareSetup)` | Runs the callback against the underlying `*gin.Engine` to register middleware |
+| `Use(...gin.HandlerFunc)` | Attaches middleware directly, without a callback |
+| `Listen() error` | Starts the server, choosing HTTP or HTTPS from `UseSSL` |
+| `ListenAndServeTLS(certFile, keyFile string) error` | Starts an HTTPS server with an explicit key pair, ignoring `SSLCert` and `SSLKey` |
+| `Shutdown(ctx) error` | Graceful shutdown bounded by the context deadline |
+| `Router() *gin.Engine` | The underlying Gin engine |
+| `Server() *http.Server` | The underlying HTTP server |
+| `Addr() string` | The resolved listen address |
+| `GetPort() uint16` | The configured port |
+| `IsSSLEnabled() bool` | Whether the server was configured for TLS |
+
+## Serving a file download
+
+```go
+r.GET("/report.csv", func(c *gin.Context) {
+    if err := httpserver.DownloadFile(c.Writer, "report.csv", "text/csv", content); err != nil {
+        c.AbortWithStatus(http.StatusInternalServerError)
+    }
+})
+```
+
 ## Default values
 
 | Field | Default |
@@ -110,3 +138,7 @@ func main() {
 - when `NoRouteJSON` is true, unmatched routes return a JSON 404 body instead of redirecting
 - set `NoRouteTo` to redirect unmatched routes to a fallback path (takes effect only when `NoRouteJSON` is false)
 - `DebugMode: true` sets Gin to debug mode and logs all registered routes on startup
+- `NewGin(nil)` is valid and falls back to `DefaultGinConfig()`
+- `Host` defaults to empty, which binds every interface; set it to restrict the bind address
+- `Listen` returns `http.ErrServerClosed` after a normal `Shutdown`, so treat that value as success
+- the sibling packages [`httpserver/middlewares`](./middlewares/README.md) and [`httpserver/respond`](./respond/README.md) provide ready-made middleware and response helpers for this engine
