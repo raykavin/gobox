@@ -41,7 +41,7 @@ type Result[T any] struct {
 	TotalPages int  `json:"total_pages"`
 	HasNext    bool `json:"has_next"`
 	HasPrev    bool `json:"has_prev"`
-}
+} // @name pagination.Result
 
 // NewResult creates a paginated Result from the provided data, total number of
 // records, and pagination parameters.
