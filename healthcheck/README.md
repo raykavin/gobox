@@ -52,8 +52,19 @@ func main() {
 
     http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
         report := svc.Report(r.Context())
+
+        // HealthReport carries no overall verdict, so derive one.
+        status := http.StatusOK
+        for _, db := range report.Databases {
+            if db.Status != "healthy" {
+                status = http.StatusServiceUnavailable
+                break
+            }
+        }
+
         w.Header().Set("Content-Type", "application/json")
-        json.NewEncoder(w).Encode(report)
+        w.WriteHeader(status)
+        _ = json.NewEncoder(w).Encode(report)
     })
 
     log.Fatal(http.ListenAndServe(":8080", nil))
@@ -96,4 +107,8 @@ func main() {
 - each ping is bounded by `pingTimeout` (default 5s); use `SetPingTimeout` to adjust
 - `AddDB` and `RemoveDB` are safe to call while `Report` is in progress
 - `Pinger` is satisfied by `*sql.DB` directly; no adapter is needed for standard Go database connections
-- `DBReport.Error` is only populated when `status` is `"unhealthy"`
+- `DBReport.Error` is only populated when `status` is `"unhealthy"`; the two status strings are `"healthy"` and `"unhealthy"`
+- `HealthReport` has no aggregate status field and `Report` never returns an error, so a readiness endpoint must decide its own HTTP status by inspecting `Databases`
+- `AddDB` replaces any existing entry registered under the same name
+- `SetPingTimeout` resets to the 5s default when given a non-positive duration
+- `CheckDB` returns an error only when the name is not registered; a failed ping is reported through `DBReport.Status` instead

@@ -119,3 +119,7 @@ func main() {
 - `Options.HeaderStyle` lets callers replace the default XLSX header styling
 - XLSX cell values are written through `excelize`, while CSV values are converted with `fmt.Sprint()`
 - `Write()` returns raw bytes so callers can save, stream, or attach the generated file as needed
+- an empty `Options.DefaultSheetName` falls back to `"Sheet1"`, and the default header style is a bold size-11 font on a `#FFFF00` fill
+- `New` applies those defaults once, at construction, so mutating the `Options` value afterwards has no effect
+- cancellation is checked between sheets, rows, and header cells, so `Write` aborts with `ctx.Err()` partway through a large export rather than only at the end
+- an unsupported `Format` value is rejected with an error rather than defaulting to one of the two

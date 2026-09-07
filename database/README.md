@@ -1,234 +1,63 @@
 # database
 
-The `database` package provides three reusable approaches for relational database work:
+`database` is not a Go package. It is a directory grouping three independent packages for relational database work, each importable on its own:
 
-- a lightweight typed wrapper around `database/sql`
-- a configurable GORM bootstrap with connection-pool and logging helpers
-- a schema migrator built on top of `golang-migrate`
+| Package | Import path | Use it for |
+|---|---|---|
+| [`database/sql`](./sql/README.md) | `github.com/raykavin/gobox/database/sql` | A lightweight typed wrapper over `database/sql` with caller-supplied row scanning |
+| [`database/gorm`](./gorm/README.md) | `github.com/raykavin/gobox/database/gorm` | A GORM connection factory with pooling, logging, and startup retry |
+| [`database/migrate`](./migrate/README.md) | `github.com/raykavin/gobox/database/migrate` | Versioned schema migrations and seed execution via golang-migrate |
 
-This split allows consumers to choose the abstraction level they need while keeping querying, ORM setup, and migration tooling documented in a single package.
+There is no `github.com/raykavin/gobox/database` package to import, and the three subpackages know nothing about each other. Pick the one that matches the abstraction level you want, or combine them: `migrate` at startup, then `gorm` or `sql` for queries.
 
-## Import
+## Choosing between them
 
-```go
-import "github.com/raykavin/gobox/database"
-```
+- **`database/sql`** keeps you in control of every query and every scan. Reach for it when the queries are few and hand-written, or when an ORM would only get in the way.
+- **`database/gorm`** gives you a configured `*gorm.DB`. Reach for it when you want models, associations, and `AutoMigrate`.
+- **`database/migrate`** is orthogonal to both. It applies `.up.sql` files from a directory and optionally runs seed scripts, so it pairs with either of the other two.
 
-## What it provides
+## Dialect support
 
-- `SQLConfig` for plain `database/sql` usage
-- `GormConfig` for GORM initialization and pool configuration
-- `MigrateConfig` for schema migration and seed execution
-- a generic `Connector[T]` for typed query results with `database/sql`
-- caller-defined row mapping through `ScanFunc[T]`
-- GORM connection bootstrap with retry support
-- connection pool updates and connection statistics helpers for GORM
-- a `Migrator` that applies pending migrations and optional seed files
-- sentinel errors for validation, bootstrap, and migration failures
+The three packages do not support the same set of drivers, because each delegates to a different underlying library:
 
-## Main types
+| Package | Supported |
+|---|---|
+| `database/sql` | any driver registered with `sql.Register`, imported by the caller |
+| `database/gorm` | `postgres`, `mysql`, `mariadb`, `sqlite`, `sqlserver`, `mssql` |
+| `database/migrate` | `postgres`, `mysql`, `sqlite3` |
 
-- `SQLConfig`: driver name and DSN for `database/sql`
-- `GormConfig`: dialector, DSN, retry, pool, logging, and optional `*gorm.Config` override
-- `MigrateConfig`: DSN, dialector, migration path, and optional population path
-- `ScanFunc[T]`: maps a single `sql.Rows` record into `T`
-- `Connector[T]`: executes typed queries and returns `[]T`
-- `Migrator`: validates the database connection, applies migrations, and runs seed files
+Note the naming difference: `gorm` expects `sqlite` while `migrate` expects `sqlite3`.
 
-## SQL usage
-
-Use `SQLConfig` with `NewSQL()` when you want a small wrapper over `database/sql` and full control over query execution and row scanning.
-
-Example:
+## Quick start
 
 ```go
-package main
-
 import (
-	"context"
-	"database/sql"
-	"log"
-
-	_ "<your-driver>"
-
-	"github.com/raykavin/gobox/database"
+    gormdb "github.com/raykavin/gobox/database/gorm"
+    "github.com/raykavin/gobox/database/migrate"
 )
 
-type User struct {
-	ID   int
-	Name string
+// 1. Bring the schema up to date.
+m, err := migrate.New(migrate.MigrateConfig{
+    DSN:            dsn,
+    Dialector:      "postgres",
+    MigrationsPath: "./migrations",
+})
+if err != nil {
+    return err
+}
+if err := m.Migrate(ctx); err != nil {
+    return err
 }
 
-func main() {
-	conn, err := database.NewSQL(database.SQLConfig{
-		Driver: "postgres",
-		DSN:    "postgres://user:pass@localhost:5432/app?sslmode=disable",
-	}, func(rows *sql.Rows) (User, error) {
-		var user User
-		err := rows.Scan(&user.ID, &user.Name)
-		return user, err
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer conn.Close()
+// 2. Open the connection the application will use.
+cfg := gormdb.DefaultGormConfig()
+cfg.DSN = dsn
+cfg.Dialector = "postgres"
 
-	users, err := conn.Query(context.Background(), "select id, name from users")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Printf("users found: %d", len(users))
+db, err := gormdb.New(cfg)
+if err != nil {
+    return err
 }
 ```
 
-## Migrator usage
-
-Use `MigrateConfig` with `New()` when you want to apply filesystem-based SQL migrations and optional population scripts through `golang-migrate`.
-
-Supported migrator dialects:
-
-- `postgres`
-- `mysql`
-- `sqlite3`
-
-Example:
-
-```go
-package main
-
-import (
-	"context"
-	"log"
-	"time"
-
-	"github.com/raykavin/gobox/database"
-)
-
-func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	migrator, err := database.New(database.MigrateConfig{
-		DSN:            "postgres://user:pass@localhost:5432/app?sslmode=disable",
-		Dialector:      "postgres",
-		MigrationsPath: "./migrations",
-		PopulationPath: "./populate",
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err := migrator.Migrate(ctx); err != nil {
-		log.Fatal(err)
-	}
-
-	if err := migrator.Populate(ctx); err != nil {
-		log.Fatal(err)
-	}
-}
-```
-
-## GORM usage
-
-Use `GormConfig` with `NewGorm()` when you want a ready-to-use `*gorm.DB` with shared defaults for retry, logging, and connection pool settings.
-
-Supported dialectors:
-
-- `postgres`
-- `mysql`
-- `mariadb`
-- `sqlite`
-- `sqlserver`
-- `mssql`
-
-Example:
-
-```go
-package main
-
-import (
-	"log"
-	"time"
-
-	"github.com/raykavin/gobox/database"
-)
-
-type User struct {
-	ID   uint
-	Name string
-}
-
-func main() {
-	cfg := database.DefaultGormConfig()
-	cfg.Dialector = "postgres"
-	cfg.DSN = "postgres://user:pass@localhost:5432/app?sslmode=disable"
-	cfg.LogLevel = "info"
-	cfg.SlowThreshold = 250 * time.Millisecond
-
-	db, err := database.NewGorm(cfg)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err := db.AutoMigrate(&User{}); err != nil {
-		log.Fatal(err)
-	}
-}
-```
-
-## GORM notes
-
-- `DefaultGormConfig()` returns sensible defaults for pooling, retries, and log behavior
-- `NewGorm()` validates the config, resolves the dialector, retries the initial connection, and configures the underlying `sql.DB` pool
-- `GormConfig.GormConfig` can be used to pass a custom `*gorm.Config` override
-- `UpdateConnectionPool()` reapplies pool settings on an existing `*gorm.DB`
-- `GetConnectionStats()` returns `sql.DBStats` for an active GORM connection
-- `ParseLoggerLevel()` maps strings such as `silent`, `info`, `warn`, and `error` to GORM log levels
-
-## Migrator notes
-
-- `New()` validates the migration config, opens the database connection, pings it, and initializes the underlying `golang-migrate` instance
-- `Migrate()` applies all pending migrations and returns `nil` when there are no changes to apply
-- `Populate()` is optional and executes every `.sql` file found in `PopulationPath`
-- `Populate()` returns immediately when `PopulationPath` is empty
-- `Migrate()` checks for dirty migration state before applying new migrations
-- the migrations path must exist when the migrator is created
-
-## Sentinel errors
-
-The package exposes sentinel errors for both GORM configuration and migration workflows. These can be checked with `errors.Is`:
-
-GORM bootstrap:
-
-- `ErrInvalidDatabaseConfig`
-- `ErrDatabaseDSNRequired`
-- `ErrDatabaseDialectorRequired`
-- `ErrUnsupportedDialector`
-- `ErrDatabaseConnectionFailed`
-- `ErrDatabasePoolAccessFailed`
-
-Migrator:
-
-- `ErrInvalidConfig`
-- `ErrDSNRequired`
-- `ErrDialectorRequired`
-- `ErrUnsupportedDialect`
-- `ErrMigrationsPathRequired`
-- `ErrInvalidMigrationsPath`
-- `ErrDatabasePingFailed`
-- `ErrAbsolutePathFailed`
-- `ErrMigrateInstanceFailed`
-- `ErrGetVersionFailed`
-- `ErrDatabaseDirtyState`
-- `ErrMigrationFailed`
-- `ErrGetNewVersionFailed`
-- `ErrReadPopulationDirectory`
-- `ErrReadPopulateFile`
-- `ErrPopulateExecutionFailed`
-
-## SQL notes
-
-- `NewSQL()` opens the database connection, validates the input, and pings the database before returning a connector
-- `Query()` executes a query with optional arguments and maps each row using the provided scan function
-- `Close()` releases the underlying connection pool
+Each subpackage README carries its own configuration reference, defaults, error sentinels, and examples.

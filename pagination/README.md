@@ -4,11 +4,12 @@ Offset-based pagination for Go + GORM with a fluent filter/sort API.
 
 ## Features
 
-- `Page` struct that embeds directly into request DTOs and binds from query-string params
+- `Page` request params with `Normalize` for safe defaults and a `MaxPerPage` ceiling
 - Generic `Result[T]` response envelope with metadata (`total`, `total_pages`, `has_next`, `has_prev`)
 - Fluent `FilterBuilder` with conditional helpers (`WhereIf`)
 - Fluent `SortBuilder` and a `ParseSort` helper for user-supplied sort strings
-- Single `Scope` function that plugs into any `*gorm.DB` chain
+- Single `Scope` function that plugs into any `*gorm.DB` chain, plus `FilterScope` for non-paginated lookups
+- `Presenter` for mapping a `Result[T]` to a `Result[E]` of response DTOs
 
 ## Installation
 
@@ -18,20 +19,27 @@ go get github.com/raykavin/gobox/pagination
 
 ## Usage
 
-### 1. Embed `Page` in your request DTO
+### 1. Accept the params in your request DTO
 
 ```go
 import "github.com/raykavin/gobox/pagination"
 
 type ListTransactionsRequest struct {
-    pagination.Page
+    Page      int    `form:"page"`
+    PerPage   int    `form:"per_page"`
     Status    string `form:"status"`
     MinAmount string `form:"min_amount"`
     Sort      string `form:"sort"` // e.g. "created_at desc,amount asc"
 }
+
+func (r ListTransactionsRequest) page() pagination.Page {
+    return pagination.Page{Number: r.Page, PerPage: r.PerPage}
+}
 ```
 
-Query-string params `page` and `per_page` bind automatically. Missing or invalid values are normalised to safe defaults.
+`Page` carries only `json` and `gorm` struct tags, not `form` ones, so embedding it does **not** give you query-string binding for free: Gin's `ShouldBindQuery` would look for `?Number=` and `?PerPage=`. Declare your own `form`-tagged fields as above and build a `Page` from them.
+
+Whatever values arrive, `NewQuery` calls `Normalize` on the page, so a zero or negative page becomes `DefPage`, a zero or negative size becomes `DefPerPage`, and anything above `MaxPerPage` is clamped down to it.
 
 ### 2. Build filters
 
@@ -58,6 +66,23 @@ Parse from a user-supplied string:
 sorts := pagination.ParseSort(req.Sort) // "name asc,created_at desc"
 ```
 
+**`ParseSort` does not validate field names.** It takes whatever identifier the caller supplies, and `Scope` interpolates it directly into `ORDER BY`. Feeding a raw query-string parameter straight in, as the line above does, is a SQL injection vector. Whitelist the sortable columns first:
+
+```go
+var sortable = map[string]bool{"created_at": true, "amount": true, "status": true}
+
+sorts := pagination.ParseSort(req.Sort)
+safe := sorts[:0]
+for _, srt := range sorts {
+    if sortable[srt.Field] {
+        safe = append(safe, srt)
+    }
+}
+sorts = safe
+```
+
+The same applies to `Filter.Field`. Sort *directions* are safe: anything that is not `ASC` or `DESC` is coerced to `ASC`.
+
 Or build programmatically with fallback defaults:
 
 ```go
@@ -71,7 +96,7 @@ if len(sorts) == 0 {
 ### 4. Assemble a `Query` and execute
 
 ```go
-query := pagination.NewQuery(req.Page, filters, sorts)
+query := pagination.NewQuery(req.page(), filters, sorts)
 
 var rows []Transaction
 var total int64
@@ -126,7 +151,8 @@ type Transaction struct {
 }
 
 type ListTransactionsRequest struct {
-    pagination.Page
+    Page      int    `form:"page"`
+    PerPage   int    `form:"per_page"`
     Status    string `form:"status"`
     MinAmount string `form:"min_amount"`
     Sort      string `form:"sort"`
@@ -157,7 +183,8 @@ func (h *TransactionHandler) List(c *gin.Context) {
             Build()
     }
 
-    query := pagination.NewQuery(req.Page, fb.Build(), sorts)
+    page := pagination.Page{Number: req.Page, PerPage: req.PerPage}
+    query := pagination.NewQuery(page, fb.Build(), sorts)
 
     var rows []Transaction
     var total int64
@@ -168,6 +195,43 @@ func (h *TransactionHandler) List(c *gin.Context) {
     c.JSON(http.StatusOK, pagination.NewResult(rows, int(total), query.Page))
 }
 ```
+
+## Reusing filters without pagination
+
+`FilterScope` applies only the filters, so `First`/`Take` style lookups can share the same `FilterBuilder` API:
+
+```go
+filters := pagination.NewFilterBuilder().
+    Where("email", pagination.Eq, "user@example.com").
+    Build()
+
+var user User
+db.Model(&User{}).
+    Scopes(pagination.FilterScope(filters)).
+    First(&user)
+```
+
+## Mapping rows to response DTOs
+
+`Presenter` converts a `Result[T]` into a `Result[E]` while carrying every metadata field across, so entities never have to leak into the API layer:
+
+```go
+result := pagination.NewResult(rows, int(total), query.Page)
+
+c.JSON(http.StatusOK, pagination.Presenter(result, func(txs []Transaction) []TransactionDTO {
+    out := make([]TransactionDTO, 0, len(txs))
+    for _, t := range txs {
+        out = append(out, toDTO(t))
+    }
+    return out
+}))
+```
+
+## Field names and SQL safety
+
+Filter and sort **values** are always passed to GORM as bound parameters, and `Like`/`ILike` values additionally have `%`, `_`, and `\` escaped so user input matches literally inside the surrounding `%...%`.
+
+Field **names** are a different matter: they are column identifiers, which cannot be parameterized, so `Scope`, `FilterScope`, and `applySorts` interpolate them into the SQL text as given. Any field name that can originate from a request must be validated against a whitelist before it reaches a `Filter` or a `Sort`.
 
 ## Reference
 
@@ -189,8 +253,8 @@ func (h *TransactionHandler) List(c *gin.Context) {
 | `Gte`       | `>=`              |
 | `Lt`        | `<`               |
 | `Lte`       | `<=`              |
-| `Like`      | `LIKE '%…%'`      |
-| `ILike`     | `ILIKE '%…%'`     |
+| `Like`      | `LIKE '%…%'`, with wildcards in the value escaped |
+| `ILike`     | `ILIKE '%…%'`, with wildcards in the value escaped |
 | `In`        | `IN (?)`          |
 | `NotIn`     | `NOT IN (?)`      |
 | `IsNull`    | `IS NULL`         |

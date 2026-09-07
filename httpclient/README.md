@@ -19,7 +19,7 @@ import "github.com/raykavin/gobox/httpclient"
 
 ## Main functions
 
-- `NewRequestWithContext`: builds the request, applies query params and headers, executes it, and returns the raw body bytes, HTTP status code, and any error
+- `NewRequestWithContext`: builds the request, applies query params and headers, executes it, and returns the raw body bytes, HTTP status code, and any error. The variadic final argument optionally replaces the default client
 - `DecompressResponse`: wraps `http.Response.Body` in a decompressing reader for gzip, deflate, Brotli, or zstd
 
 ## Example
@@ -92,4 +92,6 @@ data, _ := io.ReadAll(reader)
 
 - the package-level default client has a 30s timeout; pass a custom `*http.Client` as the last argument to `NewRequestWithContext` to override it
 - `DecompressResponse` supports `gzip`, `deflate`, `br` (Brotli), `zstd`, and `identity`; an unknown encoding returns an error
-- `DefaultCompressedHeaders` sets `Accept-Encoding: gzip, deflate, br, zstd`; use it together with `DecompressResponse` to handle compressed responses transparently
+- `NewRequestWithContext` returns the body exactly as it came off the wire and never decompresses it. `DecompressResponse` takes an `*http.Response`, so the two cannot be combined: if you need `Accept-Encoding` control and decompression together, build the request with `net/http` directly and pass the response to `DecompressResponse`
+- by default Go's transport adds its own `Accept-Encoding: gzip` and decompresses the response for you. Setting the header explicitly, which is what `DefaultCompressedHeaders` does, turns that off and hands you the compressed bytes
+- `MapParams` is a plain `map[string]string`, so it can be passed anywhere the `queryParams` or `headers` arguments are expected, and a plain map literal works just as well

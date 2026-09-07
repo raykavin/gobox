@@ -143,4 +143,8 @@ The `/metrics` endpoint is served on `MetricsPort` and includes:
 - the trace exporter uses an insecure gRPC connection; add TLS by customising `newTracerProvider` if needed
 - a `Collector` that returns an error from `RegisterMetrics` is silently skipped; `Start` is not called for it
 - `Start` must return immediately; long-running work must run in a goroutine bound to the supplied context
-- the shutdown function is always safe to call, even when `New` returned an error
+- the shutdown function is always safe to call, even when `New` returned an error, where it becomes a no-op
+- `MetricsPort` is not validated: leaving it zero binds the metrics server to `:0`, which is a random free port, so set it explicitly
+- the metrics server is started with `ListenAndServe` in a goroutine whose error is discarded, so a port already in use fails silently; `New` returns successfully either way
+- a nil entry in `Collectors` is skipped rather than panicking
+- `New` installs global providers via `otel.SetTracerProvider` and `otel.SetMeterProvider`, so it affects the whole process and should be called once during startup

@@ -109,3 +109,6 @@ c, err := temporal.NewClient(cfg.Namespace, cfg.Host, cfg.Port)
 - `DefaultActivityOpts` does not set `ScheduleToCloseTimeout`; use `WithScheduleToCloseTimeout` to add an end-to-end deadline
 - passing `WithMaximumAttempts(0)` enables unlimited retries per the Temporal SDK convention
 - `DefaultActivityOpts` is safe to call from workflow code; it allocates a new `RetryPolicy` on every call
+- options are applied in the order given, so `WithRetryPolicy` placed after `WithMaximumAttempts` replaces the whole policy and discards the attempt override
+- `WithMaximumAttempts` writes through the existing `RetryPolicy` pointer, so it panics if a preceding `WithRetryPolicy(nil)` cleared it
+- `TemporalConfig.TaskQueue` is carried for the caller's own use; `NewClient` reads only `Namespace`, `Host`, and `Port`

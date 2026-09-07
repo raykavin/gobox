@@ -86,3 +86,5 @@ func main() {
 - retry applies only to the initial connection; queries are not retried automatically
 - set `GormConfig.GormConfig` to a custom `*gorm.Config` to bypass the built-in logger and configuration entirely
 - `DryRun: true` generates SQL without executing it, useful for testing
+- `ParseLoggerLevel` accepts `silent`, `info`, `warn`, `warning`, `error`, and `err`, and falls back to `info` for anything it does not recognize, so an invalid `LogLevel` is never an error
+- `mariadb` maps to the MySQL driver and `mssql` maps to the SQL Server driver; both are aliases, not separate dialectors
