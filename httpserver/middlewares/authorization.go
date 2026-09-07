@@ -46,12 +46,37 @@ type TokenVerifier interface {
 	HasRole(claims oidcauth.Claims, role string) bool
 }
 
+// AuthorizationOptions tunes how the caller's token is located.
+type AuthorizationOptions struct {
+	// SessionCookieName is the cookie the session identifier is read from.
+	// Empty means SessionCookie. It must match the name whatever issues the
+	// cookie writes — for the bundled login flow, AuthCookieOptions.Name.
+	SessionCookieName string
+}
+
+func (o AuthorizationOptions) sessionCookieName() string {
+	if o.SessionCookieName == "" {
+		return SessionCookie
+	}
+	return o.SessionCookieName
+}
+
 // Authorization resolves and verifies the caller's token, then stores its
 // claims in the context (see ClaimsFromContext). Aborts 401 if the token
 // is missing/malformed/invalid, 403 if supplied via both header and cookie.
+//
+// It reads the default session cookie name; use AuthorizationWithOptions to
+// name a different one.
 func Authorization(verifier TokenVerifier) gin.HandlerFunc {
+	return AuthorizationWithOptions(verifier, AuthorizationOptions{})
+}
+
+// AuthorizationWithOptions is Authorization with a configurable cookie name.
+func AuthorizationWithOptions(verifier TokenVerifier, opts AuthorizationOptions) gin.HandlerFunc {
+	cookieName := opts.sessionCookieName()
+
 	return func(ctx *gin.Context) {
-		token, err := extractToken(ctx)
+		token, err := extractToken(ctx, cookieName)
 		if err != nil {
 			if errors.Is(err, ErrForbidden) {
 				respond.Forbidden(ctx, respond.NewError(
@@ -152,8 +177,8 @@ func ClaimsFromContext(ctx *gin.Context) (oidcauth.Claims, bool) {
 // validate its shape (a session ID is a UUID, but a verifier backed by
 // something else may expect a different format), leaving that to the
 // verifier itself.
-func extractToken(ctx *gin.Context) (string, error) {
-	cookie, hasCookie := readSessionCookie(ctx)
+func extractToken(ctx *gin.Context, cookieName string) (string, error) {
+	cookie, hasCookie := readSessionCookie(ctx, cookieName)
 	bearer, bearerErr := extractBearerToken(ctx.GetHeader("Authorization"))
 	hasBearer := bearerErr == nil && bearer != ""
 
@@ -169,9 +194,9 @@ func extractToken(ctx *gin.Context) (string, error) {
 	}
 }
 
-// readSessionCookie resolves the session_id cookie.
-func readSessionCookie(ctx *gin.Context) (string, bool) {
-	value, err := ctx.Cookie(SessionCookie)
+// readSessionCookie resolves the session cookie named cookieName.
+func readSessionCookie(ctx *gin.Context, cookieName string) (string, bool) {
+	value, err := ctx.Cookie(cookieName)
 	if err != nil || value == "" {
 		return "", false
 	}

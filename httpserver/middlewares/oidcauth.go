@@ -52,6 +52,34 @@ type AuthCookieOptions struct {
 	Path     string
 	Secure   bool
 	SameSite http.SameSite
+
+	// Name is the session cookie's name. Empty means SessionCookie.
+	//
+	// Whatever is set here must also be given to Authorization (see
+	// AuthorizationWithOptions), since that is what reads the cookie back:
+	// issuing one name and reading another rejects every authenticated
+	// request.
+	Name string
+
+	// CSRFName is the double-submit cookie's name. Empty means CSRFCookie.
+	// It must match the CSRFOptions.CookieName given to the CSRF middleware.
+	CSRFName string
+}
+
+// sessionName returns the configured session cookie name, or the default.
+func (o AuthCookieOptions) sessionName() string {
+	if o.Name == "" {
+		return SessionCookie
+	}
+	return o.Name
+}
+
+// csrfName returns the configured CSRF cookie name, or the default.
+func (o AuthCookieOptions) csrfName() string {
+	if o.CSRFName == "" {
+		return CSRFCookie
+	}
+	return o.CSRFName
 }
 
 // Auth handles the server-side OIDC Authorization Code + PKCE login flow: it
@@ -212,7 +240,7 @@ func (h *Auth) Callback(ctx *gin.Context) {
 // longer honours.
 func (h *Auth) Refresh(ctx *gin.Context) {
 	noStore(ctx)
-	sessionID, err := ctx.Cookie(SessionCookie)
+	sessionID, err := ctx.Cookie(h.cookies.sessionName())
 	if err != nil || sessionID == "" {
 		respond.Unauthorized(ctx, respond.NewError(
 			"ERR_MISSING_SESSION",
@@ -242,7 +270,7 @@ func (h *Auth) Refresh(ctx *gin.Context) {
 // always succeeds.
 func (h *Auth) Logout(ctx *gin.Context) {
 	noStore(ctx)
-	sessionID, _ := ctx.Cookie(SessionCookie)
+	sessionID, _ := ctx.Cookie(h.cookies.sessionName())
 
 	var idToken string
 	if sessionID != "" {
@@ -294,16 +322,16 @@ func (h *Auth) applySession(ctx *gin.Context, session *oidcauth.Session) {
 	if maxAge < 0 {
 		maxAge = 0
 	}
-	h.setCookie(ctx, SessionCookie, session.ID, maxAge, true)
+	h.setCookie(ctx, h.cookies.sessionName(), session.ID, maxAge, true)
 
 	// Readable by JS on purpose: the frontend echoes it back in a header for
 	// the CSRF middleware to compare against this cookie.
-	h.setCookie(ctx, CSRFCookie, randomToken(24), maxAge, false)
+	h.setCookie(ctx, h.cookies.csrfName(), randomToken(24), maxAge, false)
 }
 
 func (h *Auth) clearSessionCookie(ctx *gin.Context) {
-	h.clearCookie(ctx, SessionCookie)
-	h.clearCookie(ctx, CSRFCookie)
+	h.clearCookie(ctx, h.cookies.sessionName())
+	h.clearCookie(ctx, h.cookies.csrfName())
 }
 
 // noStore forbids caching of a response that carries or depends on session
