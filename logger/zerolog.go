@@ -26,6 +26,26 @@ type logLevel struct {
 	Color *color.Color
 }
 
+// SetLevel changes the minimum level emitted, at any time.
+//
+// zerolog keeps the threshold in a package-level atomic, so this is safe to
+// call while other goroutines are logging and takes effect on the next
+// record. That is what lets a process raise verbosity to debug a live
+// incident without a restart.
+func SetLevel(level string) error {
+	parsed, err := zerolog.ParseLevel(level)
+	if err != nil {
+		return errors.Join(ErrInvalidLogLevel, err)
+	}
+	zerolog.SetGlobalLevel(parsed)
+	return nil
+}
+
+// Level reports the minimum level currently emitted.
+func Level() string {
+	return zerolog.GlobalLevel().String()
+}
+
 // Zerolog wraps zerolog.Logger with enhanced functionality
 type Zerolog struct {
 	*zerolog.Logger
@@ -80,11 +100,9 @@ func New(config *Config) (*Zerolog, error) {
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 
 	// Parse log level
-	logMode, err := zerolog.ParseLevel(config.Level)
-	if err != nil {
-		return nil, errors.Join(ErrInvalidLogLevel, err)
+	if err := SetLevel(config.Level); err != nil {
+		return nil, err
 	}
-	zerolog.SetGlobalLevel(logMode)
 
 	// Create logger based on format
 	var logger zerolog.Logger
