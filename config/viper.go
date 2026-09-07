@@ -18,6 +18,10 @@ var (
 	ErrConfigValidationFailed = errors.New("invalid configuration")
 	ErrConfigReloadFailed     = errors.New("failed reloading the configuration")
 	ErrValidationReloadFailed = errors.Join(ErrConfigReloadFailed, ErrConfigValidationFailed)
+
+	// ErrConfigWatchUnavailable is returned when WatchConfig was requested but
+	// no config file could be resolved to watch.
+	ErrConfigWatchUnavailable = errors.New("cannot watch configuration: no config file resolved")
 )
 
 // LoaderOptions defines configuration loader options
@@ -69,7 +73,14 @@ type Loader[T any] struct {
 	validator   func(*T) error              // Optional validation function
 	ctx         context.Context             // Context for lifecycle control
 	cancel      context.CancelFunc          // Cancels context
-	debouncer   *time.Timer                 // Debounce timer for reload
+
+	// debouncer coalesces filesystem events into a single reload. It is
+	// written from the fsnotify goroutine and read by Stop from the caller's,
+	// so it needs its own lock: reusing mutex would nest it under Reload,
+	// which already takes that one.
+	debounceMu sync.Mutex
+	debouncer  *time.Timer
+	stopped    bool
 }
 
 // NewViper creates a new configuration loader
@@ -118,7 +129,9 @@ func (cl *Loader[T]) Load() (*T, error) {
 
 	// Starts file watching if enabled
 	if cl.options.WatchConfig {
-		cl.startWatching()
+		if err := cl.startWatching(); err != nil {
+			return nil, err
+		}
 	}
 
 	return config, nil
@@ -200,13 +213,18 @@ func (cl *Loader[T]) Reload() error {
 	return nil
 }
 
-// Stop stops the loader and releases resources
+// Stop stops the loader and releases resources. It is safe to call while a
+// filesystem event is in flight, and safe to call more than once.
 func (cl *Loader[T]) Stop() {
 	cl.cancel()
 
+	cl.debounceMu.Lock()
+	cl.stopped = true
 	if cl.debouncer != nil {
 		cl.debouncer.Stop()
+		cl.debouncer = nil
 	}
+	cl.debounceMu.Unlock()
 
 	cl.subMutex.Lock()
 	defer cl.subMutex.Unlock()
@@ -228,46 +246,73 @@ func (cl *Loader[T]) loadConfig() (*T, error) {
 		}
 	}
 
-	configFile := cl.viper.ConfigFileUsed()
-	if configFile != "" {
-		// Reads raw file content
+	// The file-bound instance must stay intact. Replacing cl.viper with the
+	// buffer-backed one below detached the loader from the file: the next
+	// ReadInConfig found nothing, ConfigFileUsed went empty, and every later
+	// Reload silently re-unmarshalled the first load's buffer while reporting
+	// success. It also broke watching, since startWatching runs after this and
+	// would have watched an instance with no file behind it.
+	source := cl.viper
+
+	if configFile := cl.viper.ConfigFileUsed(); configFile != "" {
 		content, err := os.ReadFile(configFile)
 		if err != nil {
 			return nil, errors.Join(ErrConfigFileReadFailed, err)
 		}
 
-		// Expands from environment
-		expanded := os.ExpandEnv(string(content))
+		// Environment expansion happens on the raw text, so ${VAR} works
+		// anywhere in the document, including inside a DSN.
+		expanded := viper.New()
+		expanded.SetConfigType(cl.options.ConfigType)
 
-		// Creates a new Viper instance for expanded content
-		newViper := viper.New()
-		newViper.SetConfigType(cl.options.ConfigType)
-
-		if err := newViper.ReadConfig(bytes.NewBuffer([]byte(expanded))); err != nil {
+		if err := expanded.ReadConfig(bytes.NewBufferString(os.ExpandEnv(string(content)))); err != nil {
 			return nil, errors.Join(ErrConfigFileReadFailed, err)
 		}
 
-		cl.viper = newViper
+		source = expanded
 	}
 
-	// Unmarshal's configuration into struct
-	if err := cl.viper.Unmarshal(&config); err != nil {
+	if err := source.Unmarshal(&config); err != nil {
 		return nil, errors.Join(ErrConfigUnmarshalFailed, err)
 	}
 
 	return &config, nil
 }
 
-// startWatching enables file watching for config changes
-func (cl *Loader[T]) startWatching() {
+// startWatching enables file watching for config changes.
+//
+// It returns an error when the config file cannot be resolved, because
+// viper's WatchConfig fails silently in that case: the goroutine it starts
+// gives up without registering an fsnotify watch and without telling anyone,
+// leaving a caller convinced its configuration is being watched.
+func (cl *Loader[T]) startWatching() error {
+	if cl.viper.ConfigFileUsed() == "" {
+		return ErrConfigWatchUnavailable
+	}
+
 	cl.viper.WatchConfig()
 	cl.viper.OnConfigChange(func(_ fsnotify.Event) {
 		cl.debouncedReload()
 	})
+
+	return nil
 }
 
-// debouncedReload debounces reload events
+// debouncedReload coalesces a burst of filesystem events into one reload.
+//
+// An editor writing a file typically produces several events, and a rename or
+// atomic save produces more; without this, each one would re-read and re-notify.
 func (cl *Loader[T]) debouncedReload() {
+	cl.debounceMu.Lock()
+	defer cl.debounceMu.Unlock()
+
+	// A watcher event can still arrive after Stop, since fsnotify's goroutine
+	// is not synchronous with it. Scheduling a reload then would resurrect a
+	// loader the caller already released.
+	if cl.stopped {
+		return
+	}
+
 	if cl.debouncer != nil {
 		cl.debouncer.Stop()
 	}
