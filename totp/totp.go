@@ -22,7 +22,7 @@ type Config struct {
 }
 
 // DefaultConfig returns the standard, broadly-compatible parameters: SHA1,
-// 6 digits, 30-second period. Do not change these without a proven need —
+// 6 digits, 30-second period. Do not change these without a proven need
 // they are what guarantees compatibility across authenticator apps.
 func DefaultConfig() Config {
 	return Config{Digits: 6, Period: 30}
