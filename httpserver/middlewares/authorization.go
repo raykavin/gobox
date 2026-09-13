@@ -136,6 +136,50 @@ func RequireRole(verifier TokenVerifier, role string, extras ...RoleContext) gin
 	}
 }
 
+// RequireAnyRole aborts unless the caller holds at least one of roles, then
+// injects the values of any applicable extras. It exists for the rare endpoint
+// that concludes a flow which two different permissions can start: requiring a
+// single fixed role there would lock out the holder of the other one. Prefer
+// RequireRole everywhere else one route, one permission.
+//
+// Must run after Authorization. Aborts 401 if claims are absent, 403 if none
+// of roles is held, 500 on a RoleContext conflict. Calling it with no roles
+// denies every caller, since no role can satisfy an empty set.
+func RequireAnyRole(verifier TokenVerifier, roles []string, extras ...RoleContext) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		claims, ok := ClaimsFromContext(ctx)
+		if !ok {
+			respond.Unauthorized(ctx, respond.NewError("ERR_INVALID_TOKEN",
+				"Authorization token is invalid or expired"))
+			return
+		}
+
+		granted := false
+		for _, role := range roles {
+			if verifier.HasRole(claims, role) {
+				granted = true
+				break
+			}
+		}
+
+		if !granted {
+			respond.Forbidden(ctx, respond.NewError("ERR_PERMISSION_DENIED",
+				"You do not have permission to access this resource"))
+			return
+		}
+
+		if err := applyRoleContexts(ctx, verifier, claims, extras); err != nil {
+			respond.InternalServerError(ctx, respond.NewError(
+				"ERR_ROLE_CONTEXT_CONFLICT",
+				"Conflicting role context configuration",
+			))
+			return
+		}
+
+		ctx.Next()
+	}
+}
+
 // applyRoleContexts stages the values of every applicable entry, failing
 // with ErrRoleContextConflict if two disagree on a key, then commits them
 // to the context so the outcome never depends on slice order.
