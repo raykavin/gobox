@@ -207,3 +207,234 @@ func TestScopeAppliesFiltersSortsAndPagination(t *testing.T) {
 		t.Fatalf("unexpected rows for page 2 sorted desc by amount: %+v", rows)
 	}
 }
+
+func TestEscapeLike(t *testing.T) {
+	cases := []struct {
+		in   any
+		want string
+	}{
+		{"plain", "plain"},
+		{"50%", "50!%"},
+		{"a_b", "a!_b"},
+		{"cool!", "cool!!"},
+		{`c:\tmp`, `c:\tmp`},
+		{"100%_!x", "100!%!_!!x"},
+		{42, "42"},
+	}
+
+	for _, c := range cases {
+		if got := EscapeLike(c.in); got != c.want {
+			t.Fatalf("EscapeLike(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestFilterBuilderGroupOr(t *testing.T) {
+	filters := NewFilterBuilder().
+		Where("status", Eq, "active").
+		WhereGroupOr(func(g *FilterBuilder) {
+			g.Where("description", ILike, "term")
+			g.WhereIf(false, "amount", Gte, 10)
+			g.Where("amount", Gte, 50)
+		}).
+		Build()
+
+	if len(filters) != 2 {
+		t.Fatalf("expected 2 filters, got %d", len(filters))
+	}
+
+	group := filters[1].Group
+	if group == nil {
+		t.Fatalf("expected second filter to carry a group: %+v", filters[1])
+	}
+	if group.Op != Or {
+		t.Fatalf("expected group op %q, got %q", Or, group.Op)
+	}
+	if len(group.Filters) != 2 {
+		t.Fatalf("expected 2 grouped filters, got %d", len(group.Filters))
+	}
+	if group.Filters[0].Field != "description" || group.Filters[0].Op != ILike {
+		t.Fatalf("unexpected grouped filter: %+v", group.Filters[0])
+	}
+}
+
+func TestFilterBuilderGroupOrSkipsEmptyAndFalseCond(t *testing.T) {
+	filters := NewFilterBuilder().
+		Where("status", Eq, "active").
+		WhereGroupOr(func(g *FilterBuilder) {
+			g.WhereIf(false, "description", ILike, "term")
+		}).
+		WhereGroupOrIf(false, func(g *FilterBuilder) {
+			g.Where("amount", Gte, 10)
+		}).
+		WhereGroupOr(nil).
+		Build()
+
+	if len(filters) != 1 {
+		t.Fatalf("expected only the simple filter, got %d: %+v", len(filters), filters)
+	}
+}
+
+func TestApplyFiltersGroupOrGeneratesParenthesizedSQL(t *testing.T) {
+	db := newTestDB(t)
+
+	filters := NewFilterBuilder().
+		Where("status", Eq, "active").
+		WhereGroupOr(func(g *FilterBuilder) {
+			g.Where("description", Like, "100%_x")
+			g.Where("amount", Gte, 50)
+			g.Where("id", In, []int{1, 2})
+		}).
+		Build()
+
+	sql := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		return applyFilters(tx.Model(&testTransaction{}), filters).Find(&[]testTransaction{})
+	})
+
+	if !strings.Contains(sql, "(description LIKE") {
+		t.Fatalf("expected parenthesized group, got sql: %s", sql)
+	}
+	if strings.Count(sql, " OR ") != 2 {
+		t.Fatalf("expected 2 OR separators, got sql: %s", sql)
+	}
+	if !strings.Contains(sql, "%100!%!_x%") {
+		t.Fatalf("expected escaped LIKE value inside the group, got sql: %s", sql)
+	}
+	if strings.Count(sql, LikeEscapeClause) != 1 {
+		t.Fatalf("expected the grouped LIKE to declare its escape character, got sql: %s", sql)
+	}
+	if !strings.Contains(sql, "id IN (1,2))") {
+		t.Fatalf("expected group to close after the last condition, got sql: %s", sql)
+	}
+	if !strings.Contains(sql, "status =") {
+		t.Fatalf("expected simple filter to be kept, got sql: %s", sql)
+	}
+}
+
+func TestApplyFiltersNestedGroups(t *testing.T) {
+	db := newTestDB(t)
+
+	filters := []Filter{
+		OrGroup(
+			AndGroup(
+				Filter{Field: "status", Op: Eq, Value: "active"},
+				Filter{Field: "amount", Op: Gte, Value: 50},
+			),
+			Filter{Field: "description", Op: Eq, Value: "F"},
+		),
+	}
+
+	sql := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		return applyFilters(tx.Model(&testTransaction{}), filters).Find(&[]testTransaction{})
+	})
+
+	if !strings.Contains(sql, "((status = ") || !strings.Contains(sql, " AND amount >= 50) OR description = ") {
+		t.Fatalf("unexpected nested group sql: %s", sql)
+	}
+}
+
+func TestApplyFiltersEmptyGroupEmitsNoClause(t *testing.T) {
+	db := newTestDB(t)
+
+	filters := []Filter{
+		{Field: "status", Op: Eq, Value: "active"},
+		OrGroup(),
+	}
+
+	sql := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		return applyFilters(tx.Model(&testTransaction{}), filters).Find(&[]testTransaction{})
+	})
+
+	if strings.Contains(sql, "()") {
+		t.Fatalf("expected empty group to be skipped, got sql: %s", sql)
+	}
+}
+
+func TestScopeWithGroupOrFiltersRows(t *testing.T) {
+	db := newTestDB(t)
+	seedTransactions(t, db)
+
+	filters := NewFilterBuilder().
+		Where("status", Eq, "active").
+		WhereGroupOr(func(g *FilterBuilder) {
+			g.Where("description", Like, "A")
+			g.Where("amount", Gte, 50)
+		}).
+		Build()
+
+	query := NewQuery(
+		Page{Number: 1, PerPage: 10},
+		filters,
+		[]Sort{{Field: "amount", Direction: Asc}},
+	)
+
+	var total int64
+	var rows []testTransaction
+	if err := db.Model(&testTransaction{}).
+		Scopes(Scope(query, &total)).
+		Find(&rows).Error; err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+
+	if total != 2 {
+		t.Fatalf("expected total 2, got %d", total)
+	}
+	if len(rows) != 2 || rows[0].Description != "A" || rows[1].Description != "E" {
+		t.Fatalf("unexpected rows: %+v", rows)
+	}
+}
+
+func TestLikeFiltersDeclareTheEscapeClause(t *testing.T) {
+	db := newTestDB(t)
+
+	sql := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		return applyFilters(tx.Model(&testTransaction{}), []Filter{
+			{Field: "description", Op: Like, Value: "a"},
+		}).Find(&[]testTransaction{})
+	})
+
+	if !strings.Contains(sql, "description LIKE ? "+LikeEscapeClause) &&
+		!strings.Contains(sql, `description LIKE "%a%" `+LikeEscapeClause) {
+		t.Fatalf("expected the LIKE filter to declare its escape character, got sql: %s", sql)
+	}
+}
+
+// TestLikeFilterMatchesWildcardsLiterally is the regression test for the
+// escaping being inert: without the ESCAPE clause the escape character is not
+// recognised by dialects whose default differs, and a term made of wildcards
+// silently matches every row.
+func TestLikeFilterMatchesWildcardsLiterally(t *testing.T) {
+	db := newTestDB(t)
+	rows := []testTransaction{
+		{Description: "100% approved", Amount: 1, Status: "active"},
+		{Description: "plain one", Amount: 2, Status: "active"},
+		{Description: "a_b", Amount: 3, Status: "active"},
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatalf("failed to seed transactions: %v", err)
+	}
+
+	cases := []struct {
+		term string
+		want int64
+	}{
+		{"%", 1},
+		{"_", 1},
+		{"100%", 1},
+		{"plain", 1},
+		{"!", 0},
+	}
+
+	for _, c := range cases {
+		var got int64
+		err := db.Model(&testTransaction{}).
+			Scopes(FilterScope([]Filter{{Field: "description", Op: Like, Value: c.term}})).
+			Count(&got).Error
+		if err != nil {
+			t.Fatalf("count for %q failed: %v", c.term, err)
+		}
+		if got != c.want {
+			t.Fatalf("term %q matched %d rows, want %d", c.term, got, c.want)
+		}
+	}
+}

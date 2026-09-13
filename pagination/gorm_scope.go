@@ -56,22 +56,60 @@ func FilterScope(filters []Filter) func(*gorm.DB) *gorm.DB {
 
 func applyFilters(db *gorm.DB, filters []Filter) *gorm.DB {
 	for _, f := range filters {
-		switch f.Op {
-		case IsNull:
-			db = db.Where(fmt.Sprintf("%s IS NULL", f.Field))
-		case IsNotNull:
-			db = db.Where(fmt.Sprintf("%s IS NOT NULL", f.Field))
-		case In, NotIn:
-			db = db.Where(fmt.Sprintf("%s %s (?)", f.Field, f.Op), f.Value)
-		case Like, ILike:
-			db = db.Where(fmt.Sprintf("%s %s ?", f.Field, f.Op),
-				fmt.Sprintf("%%%s%%", escapeLikeValue(derefVal(f.Value))),
-			)
-		default:
-			db = db.Where(fmt.Sprintf("%s %s ?", f.Field, f.Op), f.Value)
+		expr, args := filterExpr(f)
+		if expr == "" {
+			continue
 		}
+		db = db.Where(expr, args...)
 	}
 	return db
+}
+
+func filterExpr(f Filter) (string, []any) {
+	if f.Group != nil {
+		return groupExpr(*f.Group)
+	}
+
+	switch f.Op {
+	case IsNull:
+		return fmt.Sprintf("%s IS NULL", f.Field), nil
+	case IsNotNull:
+		return fmt.Sprintf("%s IS NOT NULL", f.Field), nil
+	case In, NotIn:
+		return fmt.Sprintf("%s %s (?)", f.Field, f.Op), []any{f.Value}
+	case Like, ILike:
+		return fmt.Sprintf("%s %s ? %s", f.Field, f.Op, LikeEscapeClause),
+			[]any{fmt.Sprintf("%%%s%%", EscapeLike(derefVal(f.Value)))}
+	default:
+		return fmt.Sprintf("%s %s ?", f.Field, f.Op), []any{f.Value}
+	}
+}
+
+func groupExpr(g FilterGroup) (string, []any) {
+	var (
+		exprs []string
+		args  []any
+	)
+
+	for _, f := range g.Filters {
+		expr, exprArgs := filterExpr(f)
+		if expr == "" {
+			continue
+		}
+		exprs = append(exprs, expr)
+		args = append(args, exprArgs...)
+	}
+
+	if len(exprs) == 0 {
+		return "", nil
+	}
+
+	op := g.Op
+	if op != Or {
+		op = And
+	}
+
+	return "(" + strings.Join(exprs, " "+string(op)+" ") + ")", args
 }
 
 func applySorts(db *gorm.DB, sorts []Sort) *gorm.DB {
@@ -83,12 +121,4 @@ func applySorts(db *gorm.DB, sorts []Sort) *gorm.DB {
 		db = db.Order(fmt.Sprintf("%s %s", s.Field, dir))
 	}
 	return db
-}
-
-// escapeLikeValue escapes LIKE/ILIKE wildcards so user input
-// is matched literally inside the surrounding %...%
-func escapeLikeValue(v any) string {
-	s := fmt.Sprintf("%v", v)
-	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return r.Replace(s)
 }

@@ -57,10 +57,47 @@
 //	pagination.Gte       // >=
 //	pagination.Lt        // <
 //	pagination.Lte       // <=
-//	pagination.Like      // LIKE  (value is automatically wrapped with %)
-//	pagination.ILike     // ILIKE (value is automatically wrapped with %)
+//	pagination.Like      // LIKE  (value wrapped with % and escaped)
+//	pagination.ILike     // ILIKE (value wrapped with % and escaped)
 //	pagination.In        // IN (?)
 //	pagination.NotIn     // NOT IN (?)
 //	pagination.IsNull    // IS NULL
 //	pagination.IsNotNull // IS NOT NULL
+//
+// # Grouping conditions
+//
+// Filters are AND-chained. [FilterBuilder.WhereGroupOr] declares a group of
+// conditions combined with OR and wrapped in parentheses, which is then
+// AND-ed with the remaining filters:
+//
+//	filters := pagination.NewFilterBuilder().
+//	    Where("status", pagination.Eq, "active").
+//	    WhereGroupOrIf(term != "", func(g *pagination.FilterBuilder) {
+//	        g.Where("description", pagination.ILike, term)
+//	        g.Where("document", pagination.ILike, term)
+//	    }).
+//	    Build()
+//
+//	// WHERE status = ? AND (description ILIKE ? OR document ILIKE ?)
+//
+// Groups support every operator a simple filter does, escape Like/ILike
+// values the same way, and are carried inside the same []Filter, so [Query],
+// [Scope] and [FilterScope] need no extra wiring. [FilterBuilder.WhereGroup]
+// takes the [LogicOp] explicitly, and [OrGroup] / [AndGroup] build the same
+// value for []Filter literals and nested groups.
+//
+// # LIKE escaping
+//
+// Like/ILike values are wrapped in %...%, escaped automatically and rendered
+// with an ESCAPE clause so the escaping is honored by every dialect.
+// [EscapeLike] and [LikeEscapeClause] expose the same pair for raw SQL written
+// outside the builder, and must be used together:
+//
+//	db.Where("name ILIKE ? "+pagination.LikeEscapeClause,
+//	    "%"+pagination.EscapeLike(term)+"%",
+//	)
+//
+// The escape character is [LikeEscapeChar], not a backslash: MySQL parses
+// backslashes inside string literals, so no single ESCAPE '\' text is valid
+// on Postgres, SQLite and MySQL at once.
 package pagination

@@ -6,7 +6,8 @@ Offset-based pagination for Go + GORM with a fluent filter/sort API.
 
 - `Page` request params with `Normalize` for safe defaults and a `MaxPerPage` ceiling
 - Generic `Result[T]` response envelope with metadata (`total`, `total_pages`, `has_next`, `has_prev`)
-- Fluent `FilterBuilder` with conditional helpers (`WhereIf`)
+- Fluent `FilterBuilder` with conditional helpers (`WhereIf`) and parenthesized `OR` groups (`WhereGroupOr`)
+- `EscapeLike` + `LikeEscapeClause` exported for hand-written `LIKE`/`ILIKE` clauses outside the builder
 - Fluent `SortBuilder` and a `ParseSort` helper for user-supplied sort strings
 - Single `Scope` function that plugs into any `*gorm.DB` chain, plus `FilterScope` for non-paginated lookups
 - `Presenter` for mapping a `Result[T]` to a `Result[E]` of response DTOs
@@ -58,6 +59,42 @@ filters := fb.Build()
 
 `WhereIf` only appends the condition when the first argument (`cond`) is `true`, making optional filters concise.
 
+#### OR groups
+
+Every `Where` is `AND`-chained. `WhereGroupOr` collects the conditions declared inside its callback into a single parenthesized `OR` clause, which is then `AND`-ed with the rest:
+
+```go
+filters := pagination.NewFilterBuilder().
+    Where("status", pagination.Eq, "active").
+    WhereGroupOrIf(req.Search != "", func(g *pagination.FilterBuilder) {
+        g.Where("description", pagination.ILike, req.Search)
+        g.Where("document", pagination.ILike, req.Search)
+    }).
+    Build()
+
+// WHERE status = ? AND (description ILIKE ? OR document ILIKE ?)
+```
+
+Grouped conditions accept every operator a simple filter does, and `Like`/`ILike` values are wrapped in `%…%` and escaped inside a group exactly as they are outside one. A group whose callback appends nothing every `WhereIf` false, for instance is dropped, so no empty `()` ever reaches the SQL.
+
+`WhereGroup(pagination.And, …)` builds an `AND` group, and `WhereGroupIf` is its conditional form. For `[]Filter` literals and for nesting, `OrGroup`/`AndGroup` produce the same thing as plain `Filter` values:
+
+```go
+filters := []pagination.Filter{
+    pagination.OrGroup(
+        pagination.AndGroup(
+            pagination.Filter{Field: "status", Op: pagination.Eq, Value: "active"},
+            pagination.Filter{Field: "amount", Op: pagination.Gte, Value: 50},
+        ),
+        pagination.Filter{Field: "description", Op: pagination.Eq, Value: "F"},
+    ),
+}
+
+// WHERE ((status = ? AND amount >= ?) OR description = ?)
+```
+
+Groups travel inside `[]Filter`, so `Query`, `Scope` and `FilterScope` take them with no extra wiring.
+
 ### 3. Build sorts
 
 Parse from a user-supplied string:
@@ -81,7 +118,7 @@ for _, srt := range sorts {
 sorts = safe
 ```
 
-The same applies to `Filter.Field`. Sort *directions* are safe: anything that is not `ASC` or `DESC` is coerced to `ASC`.
+The same applies to `Filter.Field`. Sort _directions_ are safe: anything that is not `ASC` or `DESC` is coerced to `ASC`.
 
 Or build programmatically with fallback defaults:
 
@@ -229,41 +266,74 @@ c.JSON(http.StatusOK, pagination.Presenter(result, func(txs []Transaction) []Tra
 
 ## Field names and SQL safety
 
-Filter and sort **values** are always passed to GORM as bound parameters, and `Like`/`ILike` values additionally have `%`, `_`, and `\` escaped so user input matches literally inside the surrounding `%...%`.
+Filter and sort **values** are always passed to GORM as bound parameters, and `Like`/`ILike` values additionally have `%`, `_`, and `!` escaped with an `ESCAPE '!'` clause emitted alongside so user input matches literally inside the surrounding `%...%`.
 
 Field **names** are a different matter: they are column identifiers, which cannot be parameterized, so `Scope`, `FilterScope`, and `applySorts` interpolate them into the SQL text as given. Any field name that can originate from a request must be validated against a whitelist before it reaches a `Filter` or a `Sort`.
+
+## Escaping LIKE input outside the builder
+
+`EscapeLike` is the very escaping `Like`/`ILike` apply internally, exported for raw SQL the builder does not cover free-text search with `OR` across joined tables, `EXISTS` subqueries, and so on. It comes in a pair: `LikeEscapeClause` is the `ESCAPE` fragment that tells the database which character was used, and **raw clauses must append it**, exactly as the operators do:
+
+```go
+term := "%100_off%"
+
+db.Where(
+    "name ILIKE @term "+pagination.LikeEscapeClause+
+        " OR EXISTS (SELECT 1 FROM tags t WHERE t.owner_id = owners.id AND t.name ILIKE @term "+pagination.LikeEscapeClause+")",
+    sql.Named("term", "%"+pagination.EscapeLike(term)+"%"),
+)
+```
+
+Escaping without the clause is silently inert on any dialect whose default escape character differs from `LikeEscapeChar`, so the two always travel together.
+
+`EscapeLike` escapes `%`, `_` and `LikeEscapeChar` itself so user input matches literally. It does **not** add the surrounding `%…%` that is up to the caller and it is not a substitute for binding the value as a parameter.
+
+### Why `!` and not `\`
+
+`\` is the default `LIKE` escape character in Postgres and would need no clause there, but it is not portable: MySQL also parses `\` inside string literals, so `ESCAPE '\'` is a syntax error there and the doubled form MySQL wants is in turn rejected by Postgres and SQLite. `!` needs no quoting anywhere, so a single SQL text works on Postgres, SQLite, MySQL and SQL Server. Both the character and the clause are exported constants never hardcode either.
 
 ## Reference
 
 ### Constants
 
-| Constant     | Value | Description                            |
-|--------------|-------|----------------------------------------|
-| `DefPage`    | `1`   | Default page number                    |
-| `DefPerPage` | `20`  | Default items per page                 |
-| `MaxPerPage` | `100` | Maximum allowed value for `per_page`   |
+| Constant     | Value | Description                          |
+| ------------ | ----- | ------------------------------------ |
+| `DefPage`    | `1`   | Default page number                  |
+| `DefPerPage` | `20`  | Default items per page               |
+| `MaxPerPage` | `100` | Maximum allowed value for `per_page` |
 
 ### Filter operators
 
-| Operator    | SQL equivalent    |
-|-------------|-------------------|
-| `Eq`        | `=`               |
-| `Neq`       | `<>`              |
-| `Gt`        | `>`               |
-| `Gte`       | `>=`              |
-| `Lt`        | `<`               |
-| `Lte`       | `<=`              |
-| `Like`      | `LIKE '%…%'`, with wildcards in the value escaped |
-| `ILike`     | `ILIKE '%…%'`, with wildcards in the value escaped |
-| `In`        | `IN (?)`          |
-| `NotIn`     | `NOT IN (?)`      |
-| `IsNull`    | `IS NULL`         |
-| `IsNotNull` | `IS NOT NULL`     |
+| Operator    | SQL equivalent                                                |
+| ----------- | ------------------------------------------------------------- |
+| `Eq`        | `=`                                                           |
+| `Neq`       | `<>`                                                          |
+| `Gt`        | `>`                                                           |
+| `Gte`       | `>=`                                                          |
+| `Lt`        | `<`                                                           |
+| `Lte`       | `<=`                                                          |
+| `Like`      | `LIKE '%…%' ESCAPE '!'`, with wildcards in the value escaped  |
+| `ILike`     | `ILIKE '%…%' ESCAPE '!'`, with wildcards in the value escaped |
+| `In`        | `IN (?)`                                                      |
+| `NotIn`     | `NOT IN (?)`                                                  |
+| `IsNull`    | `IS NULL`                                                     |
+| `IsNotNull` | `IS NOT NULL`                                                 |
+
+### Logic operators
+
+Used by `FilterGroup` / `WhereGroup` to combine the conditions of a group.
+
+| Constant | SQL equivalent |
+| -------- | -------------- |
+| `And`    | `AND`          |
+| `Or`     | `OR`           |
+
+Anything other than `Or` is treated as `And`.
 
 ### Sort directions
 
 | Constant | SQL equivalent |
-|----------|----------------|
+| -------- | -------------- |
 | `Asc`    | `ASC`          |
 | `Desc`   | `DESC`         |
 
