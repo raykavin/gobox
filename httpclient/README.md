@@ -13,8 +13,7 @@ import "github.com/raykavin/gobox/httpclient"
 - `NewRequestWithContext()` for building and executing an HTTP request in a single call
 - `DecompressResponse()` for transparent body decompression based on `Content-Encoding`
 - `MapParams` type with `Set` and `Del` helpers for headers and query parameters
-- header name constants (`HeaderContentType`, `HeaderAuthorization`, etc.)
-- MIME type constants (`MIMEApplicationJSON`, `MIMEApplicationXML`, etc.)
+- header name, MIME type, and `Cache-Control` constants (see [Reference](#reference))
 - header preset constructors: `DefaultJSONHeaders`, `DefaultFormHeaders`, `DefaultCompressedHeaders`
 
 ## Main functions
@@ -95,3 +94,58 @@ data, _ := io.ReadAll(reader)
 - `NewRequestWithContext` returns the body exactly as it came off the wire and never decompresses it. `DecompressResponse` takes an `*http.Response`, so the two cannot be combined: if you need `Accept-Encoding` control and decompression together, build the request with `net/http` directly and pass the response to `DecompressResponse`
 - by default Go's transport adds its own `Accept-Encoding: gzip` and decompresses the response for you. Setting the header explicitly, which is what `DefaultCompressedHeaders` does, turns that off and hands you the compressed bytes
 - `MapParams` is a plain `map[string]string`, so it can be passed anywhere the `queryParams` or `headers` arguments are expected, and a plain map literal works just as well
+- the `deflate` branch of `DecompressResponse` buffers the entire body into memory before decoding, because it has to detect whether the payload is zlib-wrapped (RFC 1950) or raw (RFC 1951); the other encodings stream
+
+## Reference
+
+### Functions
+
+| Function | Description |
+|---|---|
+| `NewRequestWithContext(ctx, method, urlStr string, queryParams, headers map[string]string, payload []byte, client ...*http.Client) ([]byte, int, error)` | Builds and executes the request, returning the raw body, the status code, and any error |
+| `DecompressResponse(r *http.Response) (io.ReadCloser, error)` | Wraps the body in a decompressing reader chosen by `Content-Encoding`; the caller closes it |
+| `DefaultJSONHeaders() MapParams` | `Content-Type` and `Accept` set to `application/json` |
+| `DefaultFormHeaders() MapParams` | `Content-Type` set to `application/x-www-form-urlencoded` |
+| `DefaultCompressedHeaders() MapParams` | `Accept-Encoding` set to `AcceptEncodingAll` |
+
+Each `Default*Headers` call returns a fresh map, so mutating the result is safe.
+
+### MapParams
+
+| Method | Description |
+|---|---|
+| `Set(k, v string)` | Assigns `v` to `k`; the map must already be initialised |
+| `Del(k string)` | Removes `k` if present |
+
+### Header constants
+
+| Constant | Value |
+|---|---|
+| `HeaderContentType` | `Content-Type` |
+| `HeaderAccept` | `Accept` |
+| `HeaderAuthorization` | `Authorization` |
+| `HeaderUserAgent` | `User-Agent` |
+| `HeaderAcceptEncoding` | `Accept-Encoding` |
+| `HeaderContentEncoding` | `Content-Encoding` |
+| `HeaderCacheControl` | `Cache-Control` |
+| `HeaderXRequestID` | `X-Request-Id` |
+
+### MIME type constants
+
+| Constant | Value |
+|---|---|
+| `MIMEApplicationJSON` | `application/json` |
+| `MIMEApplicationXML` | `application/xml` |
+| `MIMEApplicationFormURLEncoded` | `application/x-www-form-urlencoded` |
+| `MIMEMultipartFormData` | `multipart/form-data` |
+| `MIMETextPlain` | `text/plain; charset=utf-8` |
+| `MIMEOctetStream` | `application/octet-stream` |
+
+### Cache-Control and encoding constants
+
+| Constant | Value |
+|---|---|
+| `CacheControlNoCache` | `no-cache` |
+| `CacheControlNoStore` | `no-store` |
+| `CacheControlMaxAge0` | `max-age=0` |
+| `AcceptEncodingAll` | `gzip, deflate, br, zstd` — every encoding `DecompressResponse` implements |
