@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -213,6 +214,28 @@ func TestVerify_ValidToken(t *testing.T) {
 	claims, err := v.Verify(context.Background(), token)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
+	}
+	if claims.Sub != "user-123" {
+		t.Errorf("Sub = %q, want user-123", claims.Sub)
+	}
+}
+
+// A Keycloak client whose dedicated scope leaves a single audience emits
+// aud as a bare string rather than a one-element array. go-oidc accepts both,
+// so Verify must too.
+func TestVerify_SingleStringAudience(t *testing.T) {
+	mp := newMockProvider(t)
+	v := newTestVerifier(t, mp)
+
+	claimSet := validClaims(mp)
+	claimSet["aud"] = "test-client"
+
+	claims, err := v.Verify(context.Background(), mp.makeToken(t, claimSet))
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !slices.Equal(claims.Aud, Audience{"test-client"}) {
+		t.Errorf("Aud = %#v, want [test-client]", claims.Aud)
 	}
 	if claims.Sub != "user-123" {
 		t.Errorf("Sub = %q, want user-123", claims.Sub)
