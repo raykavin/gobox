@@ -104,5 +104,5 @@ lastUsedStep = step
 - Candidate codes are compared with `hmac.Equal`, so a partial match does not leak through timing.
 - A `window` of `1` accepts the previous, current, and next step, which tolerates roughly ±30 seconds of clock skew at the default period. Widening it beyond that lengthens the window in which a phished code stays usable.
 - Secrets are the full authentication factor. Encrypt them at rest (see [`secure`](../secure/README.md)) and never log them or the `otpauth://` URI, which embeds the secret in plaintext.
-- `BuildOTPAuthURI` escapes `issuer` and `account` in the label, but `issuer` is also written to the query string as provided.
+- `BuildOTPAuthURI` escapes `issuer` and `account` with `url.PathEscape` in the label, and the query string is assembled with `url.Values.Encode`, which percent-encodes `issuer` there too. The `algorithm` parameter is always emitted as `SHA1`, matching the fixed implementation.
 - `totp_test.go` pins the implementation against the RFC 6238 Appendix B test vectors.

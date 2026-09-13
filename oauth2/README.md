@@ -90,6 +90,6 @@ The authentication URL is not a constructor argument; set it with `WithAuthentic
 
 - **`TokenManager` is not safe for concurrent use.** The per-scope cache is a plain map with no locking, so sharing one manager across goroutines races on both read and write. Confine one to a single goroutine, or guard it with your own mutex
 - tokens are cached per scope, and a scope is required: `GetAccessToken`, `GetTokenType`, and `SetAuthorizationHeader` all reject an empty one
-- expiry is computed as `LastAuthentication + ExpiresIn`, with no safety margin, so a token can be sent moments before the issuer considers it expired. Under a slow network that request may come back 401
+- expiry is computed as `LastAuthentication + ExpiresIn`, and `LastAuthentication` is backdated by five seconds when the token is stored, so a token is treated as expired five seconds before the issuer would. That margin absorbs clock skew and request latency, but it is fixed: it is not proportional to `ExpiresIn`, and a very short-lived token gets no more slack than a long-lived one
 - the refresh token is decoded and stored but never used: an expired token triggers a full re-authentication with the client credentials rather than a `refresh_token` grant
 - `SendAsGet`, the default, puts `client_secret` in the query string, where it commonly lands in proxy and server access logs. Prefer `SendAsPost`
