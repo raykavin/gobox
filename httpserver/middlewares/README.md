@@ -188,16 +188,20 @@ r.GET("/auth/me", auth.Me)
 
 ### Errors
 
-| Sentinel | Meaning |
-|---|---|
-| `ErrMissingToken` | No token in either the header or the cookie |
-| `ErrForbidden` | Token supplied via both header and cookie |
-| `ErrMissingAuthorizationHeader` | No `Authorization` header |
-| `ErrInvalidAuthorizationFormat` | Header is not `Bearer <token>` |
-| `ErrEmptyToken` | Header is well formed but the token is empty |
-| `ErrInvalidToken` | The verifier rejected the token |
-| `ErrRoleContextConflict` | Two `RoleContext` entries write the same key |
-| `ErrPermissionDenied` | The caller does not hold the required role |
+Every middleware here is a `gin.HandlerFunc`, so none of them returns an error: a rejection is written to the response as an `APIError` and the chain is aborted. The sentinels below are exported for tests and for code that wraps this package, but **no exported function ever returns one to a caller**; match on the response code instead.
+
+| Sentinel | Meaning | Where it is produced |
+|---|---|---|
+| `ErrMissingToken` | No token in either the header or the cookie | Internal to token extraction; surfaces as 401 `ERR_MISSING_TOKEN` |
+| `ErrForbidden` | Token supplied via both header and cookie | Internal to token extraction; surfaces as 403 `ERR_TOKEN_CONFLICT` |
+| `ErrMissingAuthorizationHeader` | No `Authorization` header | Internal to bearer parsing; folded into `ERR_MISSING_TOKEN` |
+| `ErrInvalidAuthorizationFormat` | Header is not `Bearer <token>` | Internal to bearer parsing; folded into `ERR_MISSING_TOKEN` |
+| `ErrEmptyToken` | Header is well formed but the token is empty | Internal to bearer parsing; folded into `ERR_MISSING_TOKEN` |
+| `ErrRoleContextConflict` | Two `RoleContext` entries write the same key | Internal to `RequireRole`; surfaces as 500 `ERR_ROLE_CONTEXT_CONFLICT` |
+| `ErrInvalidToken` | Declared but unused | No code path produces it; a rejected token surfaces as 401 `ERR_INVALID_TOKEN` |
+| `ErrPermissionDenied` | Declared but unused | No code path produces it; a missing role surfaces as 403 `ERR_PERMISSION_DENIED` |
+
+The response `code` values in the last column are the stable contract for clients: `ERR_MISSING_TOKEN`, `ERR_TOKEN_CONFLICT`, `ERR_INVALID_TOKEN`, `ERR_PERMISSION_DENIED`, `ERR_ROLE_CONTEXT_CONFLICT`, `ERR_CSRF_TOKEN_MISSING`, and `ERR_CSRF_TOKEN_MISMATCH`.
 
 ## Notes
 
