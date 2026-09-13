@@ -105,8 +105,38 @@ func ServiceUnavailable(ctx *gin.Context, errs ...APIError) {
 
 // Error sends a custom error response with the given HTTP status code.
 // Use this when none of the specific helpers above fit.
+//
+// The envelope message follows the status, matching what the helpers above
+// would have sent: a 422 announced as an internal failure contradicts its own
+// status code, and it is the message a client with no mapping for the error's
+// code falls back to.
 func Error(ctx *gin.Context, status int, errs ...APIError) {
-	ctx.AbortWithStatusJSON(status, errorResponse(errs, msgInternalError))
+	ctx.AbortWithStatusJSON(status, errorResponse(errs, statusMessage(status)))
+}
+
+// statusMessage returns the default envelope message for a status, falling
+// back to the internal-error text for anything unmapped.
+func statusMessage(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return msgBadRequest
+	case http.StatusUnauthorized:
+		return msgUnauthorized
+	case http.StatusForbidden:
+		return msgForbidden
+	case http.StatusNotFound:
+		return msgNotFound
+	case http.StatusConflict:
+		return msgConflict
+	case http.StatusUnprocessableEntity:
+		return msgUnprocessable
+	case http.StatusTooManyRequests:
+		return msgTooManyRequest
+	case http.StatusServiceUnavailable:
+		return msgServiceUnavailable
+	default:
+		return msgInternalError
+	}
 }
 
 // NewError is a convenience constructor for building an APIError.
