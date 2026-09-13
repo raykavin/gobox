@@ -2,13 +2,48 @@ package oidcauth
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 )
+
+// Audience is the JWT "aud" claim. RFC 7519 §4.1.3 allows it in two shapes:
+// an array of strings in the general case, or a single bare string when the
+// token has exactly one audience which is what Keycloak emits once a
+// client's dedicated scope narrows the token down to one. Both decode into
+// this slice, so whichever shape the issuer happened to pick never reaches
+// the rest of the code.
+//
+// Without this, a token whose aud is a plain string fails to decode with
+// "json: cannot unmarshal string into Go struct field Claims.aud of type
+// []string" *after* go-oidc has already accepted it (go-oidc normalizes both
+// shapes internally), turning a perfectly valid token into a verification
+// error.
+type Audience []string
+
+// UnmarshalJSON accepts both the array and the single-string form of "aud",
+// normalizing the latter into a one-element slice.
+func (a *Audience) UnmarshalJSON(data []byte) error {
+	// Array first: it is the general case, and it also absorbs a JSON null
+	// as an empty audience rather than erroring on it.
+	var list []string
+	if err := json.Unmarshal(data, &list); err == nil {
+		*a = list
+		return nil
+	}
+
+	var single string
+	if err := json.Unmarshal(data, &single); err != nil {
+		return fmt.Errorf("oidcauth: aud claim is neither a string nor an array of strings: %w", err)
+	}
+	*a = Audience{single}
+	return nil
+}
 
 // Claims represents the structure of the
 // claims extracted from an authentication token.
 type Claims struct {
-	Aud               []string                       `json:"aud"`
+	Aud               Audience                       `json:"aud"`
 	AllowedOrigins    []string                       `json:"allowed-origins"`
 	Jti               string                         `json:"jti"`
 	Iss               string                         `json:"iss"`
