@@ -88,7 +88,7 @@ Expansion runs over the raw file text before parsing, so `${VAR}` works anywhere
 Two mechanisms are available, and they can be used together:
 
 ```go
-// Callbacks, set on LoaderOptions, fire synchronously on the watcher goroutine.
+// Callbacks, set on LoaderOptions, each run in their own goroutine.
 opts.OnConfigChange = func(cfg *AppConfig) { /* ... */ }
 opts.OnConfigChangeError = func(err error) { /* ... */ }
 
@@ -156,6 +156,7 @@ All are joined with the underlying cause, so `errors.Is` matches the sentinel an
 
 ## Notes
 
+- `OnConfigChange` and `OnConfigChangeError` are each invoked with `go`, so they run concurrently with the reload that triggered them and with each other. A callback must therefore be safe for concurrent use, and returning from it does not mean the notification is complete
 - subscriber channels are buffered to 10 events and sends are non-blocking, so a slow consumer drops events rather than stalling the watcher; treat an event as a signal to call `GetCurrent()`, not as a guaranteed log of every change
 - `Load` returns `ErrConfigWatchUnavailable` rather than silently succeeding when watching is requested but no file was found. Viper's own `WatchConfig` fails silently in that case, which would leave a caller convinced its configuration is being watched
 - `Stop` closes subscriber channels, so a `range` over a subscription terminates; do not call `Unsubscribe` on a channel after `Stop`

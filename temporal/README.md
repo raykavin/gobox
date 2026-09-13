@@ -10,7 +10,7 @@ import "github.com/raykavin/gobox/temporal"
 
 ## What it provides
 
-- `NewClient()` for dialling a Temporal server with host, port, and namespace validation
+- `NewClient()` for dialling a Temporal server, requiring a non-empty host and namespace
 - `TemporalConfig` for carrying connection parameters with Viper-compatible mapstructure tags
 - `DefaultActivityOpts()` for building `workflow.ActivityOptions` with a sensible retry policy
 - functional options for overriding specific activity fields: `WithTaskQueue`, `WithStartToCloseTimeout`, `WithScheduleToCloseTimeout`, `WithMaximumAttempts`, `WithRetryPolicy`
@@ -112,3 +112,4 @@ c, err := temporal.NewClient(cfg.Namespace, cfg.Host, cfg.Port)
 - options are applied in the order given, so `WithRetryPolicy` placed after `WithMaximumAttempts` replaces the whole policy and discards the attempt override
 - `WithMaximumAttempts` writes through the existing `RetryPolicy` pointer, so it panics if a preceding `WithRetryPolicy(nil)` cleared it
 - `TemporalConfig.TaskQueue` is carried for the caller's own use; `NewClient` reads only `Namespace`, `Host`, and `Port`
+- only `host` and `namespace` are validated. `port` is formatted and joined as given, so a zero port produces `host:0` and the failure surfaces from the SDK's dial rather than as one of the sentinels above
