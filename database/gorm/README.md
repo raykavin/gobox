@@ -84,6 +84,9 @@ func main() {
 ## Notes
 
 - retry applies only to the initial connection; queries are not retried automatically
+- `RetryAttempts` counts *retries*, not total tries: the default of 3 means up to four `gorm.Open` calls, with a fixed `RetryDelay` between them. The delay is constant, not exponential, and the sleep is skipped after the final failure
+- when `GormConfig.GormConfig` is left nil, the built-in `*gorm.Config` also sets `CreateBatchSize: 1000`, `FullSaveAssociations: false`, and a logger with `IgnoreRecordNotFoundError: true` and colors off. Supplying your own `*gorm.Config` replaces all of that, including `SkipDefaultTx`, `PrepareStmt`, `DryRun`, `LogLevel`, and `SlowThreshold`, which are then ignored
+- the pool settings are applied separately from `GormConfig.GormConfig` and always take effect; a non-positive value leaves the corresponding `database/sql` default in place rather than setting zero
 - set `GormConfig.GormConfig` to a custom `*gorm.Config` to bypass the built-in logger and configuration entirely
 - `DryRun: true` generates SQL without executing it, useful for testing
 - `ParseLoggerLevel` accepts `silent`, `info`, `warn`, `warning`, `error`, and `err`, and falls back to `info` for anything it does not recognize, so an invalid `LogLevel` is never an error
