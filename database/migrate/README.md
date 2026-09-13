@@ -99,7 +99,7 @@ All sentinels can be matched with `errors.Is`. Validation failures are wrapped a
 | `ErrGetVersionFailed` | the current migration version could not be read |
 | `ErrDatabaseDirtyState` | a previous migration left the database in a dirty state |
 | `ErrMigrationFailed` | `migrate.Up()` returned an unexpected error |
-| `ErrGetNewVersionFailed` | the version could not be re-read after applying |
+| `ErrGetNewVersionFailed` | declared but unused; no code path returns it |
 
 ### Population
 
@@ -117,3 +117,6 @@ All sentinels can be matched with `errors.Is`. Validation failures are wrapped a
 - if the database is in a dirty state, manual intervention is required before migrations can proceed
 - `MigrationsPath` must exist when `New` is called; `PopulationPath` is only read when `Populate` runs
 - the drivers for all three supported dialects are linked in by this package, so callers do not need their own blank imports
+- `Migrator` exposes no `Close`. `New` opens a `*sql.DB` and keeps it for the lifetime of the value, so the pool is only released when the process exits. That suits the intended use — migrate once at startup — but a long-lived process that builds a `Migrator` repeatedly will leak a pool each time
+- cancellation is checked before and after `migrate.Up()`, never during it, so cancelling `ctx` does not interrupt a migration already in flight. `Populate` checks between files, so it stops at a file boundary
+- `Populate` sends each file to `ExecContext` as a single statement; whether multiple statements in one file are accepted depends on the driver
