@@ -137,6 +137,12 @@ func (h *Handler) Create(c *gin.Context) {
 | `SetFallback(Err) error` | Replaces the response used when nothing matches |
 | `Len() int` | Number of registered mappings |
 
+`Err` also carries one method of its own:
+
+| Method | Description |
+|---|---|
+| `IsErr(err error) bool` | Reports whether `err` matches this entry's sentinel, i.e. `errors.Is(err, e.Err)`. This is the test `Lookup` applies to each entry in turn |
+
 ## Notes
 
 - match priority follows registration order, so register specific errors before the generic ones they wrap
