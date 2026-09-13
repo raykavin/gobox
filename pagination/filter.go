@@ -29,11 +29,43 @@ const (
 	Desc SortDirection = "DESC"
 )
 
-// Filter represents a single WHERE condition
+// LogicOp combines the conditions of a FilterGroup
+type LogicOp string
+
+const (
+	And LogicOp = "AND"
+	Or  LogicOp = "OR"
+)
+
+// Filter represents a single WHERE condition. When Group is set the other
+// fields are ignored and the filter renders as a parenthesized group
 type Filter struct {
 	Field string
 	Op    Operator
 	Value any
+	Group *FilterGroup
+}
+
+// FilterGroup is a set of conditions combined by a single logical operator
+// and wrapped in parentheses
+type FilterGroup struct {
+	Op      LogicOp
+	Filters []Filter
+}
+
+// OrGroup returns a Filter that combines the given conditions with OR
+//
+//	pagination.OrGroup(
+//	    pagination.Filter{Field: "name", Op: pagination.ILike, Value: term},
+//	    pagination.Filter{Field: "document", Op: pagination.ILike, Value: term},
+//	)
+func OrGroup(filters ...Filter) Filter { return newGroup(Or, filters) }
+
+// AndGroup returns a Filter that combines the given conditions with AND
+func AndGroup(filters ...Filter) Filter { return newGroup(And, filters) }
+
+func newGroup(op LogicOp, filters []Filter) Filter {
+	return Filter{Group: &FilterGroup{Op: op, Filters: filters}}
 }
 
 // Sort represents a single ORDER BY clause
@@ -86,6 +118,53 @@ func (b *FilterBuilder) WhereIf(cond bool, field string, op Operator, value any)
 	}
 
 	return b
+}
+
+// WhereGroup appends a parenthesized group whose conditions are combined
+// with op. The group is dropped when build adds no condition
+//
+//	filters := pagination.NewFilterBuilder().
+//	    Where("status", pagination.Eq, "active").
+//	    WhereGroup(pagination.Or, func(g *pagination.FilterBuilder) {
+//	        g.Where("name", pagination.ILike, term)
+//	        g.Where("document", pagination.ILike, term)
+//	    }).
+//	    Build()
+//
+//	// status = ? AND (name ILIKE ? OR document ILIKE ?)
+func (b *FilterBuilder) WhereGroup(op LogicOp, build func(*FilterBuilder)) *FilterBuilder {
+	if build == nil {
+		return b
+	}
+
+	inner := NewFilterBuilder()
+	build(inner)
+	if len(inner.filters) == 0 {
+		return b
+	}
+
+	b.filters = append(b.filters, newGroup(op, inner.filters))
+
+	return b
+}
+
+// WhereGroupIf appends the group only when cond is true
+func (b *FilterBuilder) WhereGroupIf(cond bool, op LogicOp, build func(*FilterBuilder)) *FilterBuilder {
+	if cond {
+		return b.WhereGroup(op, build)
+	}
+
+	return b
+}
+
+// WhereGroupOr appends a parenthesized group whose conditions are combined with OR
+func (b *FilterBuilder) WhereGroupOr(build func(*FilterBuilder)) *FilterBuilder {
+	return b.WhereGroup(Or, build)
+}
+
+// WhereGroupOrIf appends the OR group only when cond is true
+func (b *FilterBuilder) WhereGroupOrIf(cond bool, build func(*FilterBuilder)) *FilterBuilder {
+	return b.WhereGroupIf(cond, Or, build)
 }
 
 func (b *FilterBuilder) Build() []Filter { return b.filters }
