@@ -30,7 +30,7 @@ var safeMethods = map[string]bool{
 // CSRFOptions names the cookie/header pair the double-submit check uses.
 //
 // Both default to CSRFCookie/CSRFHeader when empty. CookieName must match the
-// name whatever issues the cookie writes — for the bundled login flow that is
+// name whatever issues the cookie writes for the bundled login flow that is
 // AuthCookieOptions.CSRFName, which shares the same default.
 type CSRFOptions struct {
 	CookieName string

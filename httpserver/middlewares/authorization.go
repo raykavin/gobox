@@ -50,7 +50,7 @@ type TokenVerifier interface {
 type AuthorizationOptions struct {
 	// SessionCookieName is the cookie the session identifier is read from.
 	// Empty means SessionCookie. It must match the name whatever issues the
-	// cookie writes — for the bundled login flow, AuthCookieOptions.Name.
+	// cookie writes for the bundled login flow, AuthCookieOptions.Name.
 	SessionCookieName string
 }
 
