@@ -6,15 +6,27 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
+	"github.com/raykavin/gobox/retry"
 )
+
+// ErrTransientHTTPStatus marks an HTTP response worth retrying (429 or
+// 5xx). WithRetry returns the original response (body, status, nil error)
+// once retries are exhausted on this kind of failure, exactly as if no
+// retry wrapper were present, so callers keep inspecting the status code
+// themselves; it is exported only so a caller can tell, via errors.Is on
+// the pre-exhaustion error, that a failure was transient rather than
+// checking the returned status is enough for the common case.
+var ErrTransientHTTPStatus = errors.New("transient http status")
 
 // MapParams is a map type used by this package for request headers
 // and query parameters.
@@ -63,6 +75,13 @@ const (
 // AcceptEncodingAll declares support for all encodings implemented in
 // DecompressResponse. Use alongside DecompressResponse.
 const AcceptEncodingAll = "gzip, deflate, br, zstd"
+
+const (
+	RetryMaxAttempts = 4
+	RetryWaitMin     = 200 * time.Millisecond
+	RetryWaitMax     = 5 * time.Second
+	retryAfterCap    = 30 * time.Second
+)
 
 // DefaultJSONHeaders returns a new map with standard JSON request headers.
 func DefaultJSONHeaders() MapParams {
@@ -148,6 +167,95 @@ func NewRequestWithContext(
 	return respBody, resp.StatusCode, nil
 }
 
+// WithRetry runs do once per attempt (up to RetryMaxAttempts, with
+// exponential backoff via gobox/retry) and retries only transient
+// failures: a transport-level error (network I/O, auth token acquisition)
+// or a response with an IsTransientHTTPStatus code. A non-transient status
+// (any other 4xx) is returned as-is after the very first attempt, exactly
+// as if no retry wrapper were present validation errors and definitive
+// authentication failures are never retried. Context cancellation is
+// never retried either gobox/retry's own wait already respects ctx, and
+// shouldRetry here bails out immediately rather than spending an attempt.
+//
+// When a transient response carries a Retry-After header, WithRetry waits
+// at least that long (capped at 30s) before the next attempt, in addition
+// to gobox/retry's own backoff a deliberate "wait at least this long"
+// floor, not a replacement for the schedule gobox/retry already owns.
+func WithRetry(ctx context.Context, do func() (
+	body []byte,
+	status int,
+	retryAfter time.Duration,
+	err error,
+)) ([]byte, int, error) {
+	var (
+		body   []byte
+		status int
+	)
+
+	err := retry.Do(
+		ctx,
+		RetryMaxAttempts,
+		RetryWaitMin,
+		RetryWaitMax,
+		func(_ int, err error) bool {
+			return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+		},
+		func() error {
+			var (
+				retryAfter time.Duration
+				innerErr   error
+			)
+
+			body, status, retryAfter, innerErr = do()
+			if innerErr != nil {
+				return innerErr
+			}
+			if !IsTransientHTTPStatus(status) {
+				return nil
+			}
+
+			if retryAfter > 0 {
+				sleepCtx(ctx, min(retryAfter, retryAfterCap))
+			}
+			return fmt.Errorf("%w: status %d", ErrTransientHTTPStatus, status)
+		},
+	)
+
+	if err != nil && !errors.Is(err, ErrTransientHTTPStatus) {
+		return nil, 0, err
+	}
+	return body, status, nil
+}
+
+// ParseRetryAfter parses an HTTP Retry-After header value (either an
+// integer number of seconds or an HTTP-date), returning 0 if empty or
+// unparseable.
+func ParseRetryAfter(value string) time.Duration {
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds < 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(value); err == nil {
+		if d := time.Until(when); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// IsTransientHTTPStatus reports whether status is worth retrying: 429 (rate
+// limited) or any 5xx (server-side failure). Any other 4xx is a definitive
+// client error (bad request, unauthorized, not found, ...) and must never
+// be retried.
+func IsTransientHTTPStatus(status int) bool {
+	return status == http.StatusTooManyRequests || (status >= 500 && status < 600)
+}
+
 // DecompressResponse wraps the response body in the appropriate decompression
 // reader based on the Content-Encoding header.
 // The caller is responsible for closing the returned reader.
@@ -188,5 +296,15 @@ func DecompressResponse(r *http.Response) (io.ReadCloser, error) {
 
 	default:
 		return nil, fmt.Errorf("unsupported content encoding %q", enc)
+	}
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
 	}
 }
